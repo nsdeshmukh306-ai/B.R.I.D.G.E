@@ -38,12 +38,9 @@ class _WindowProjectorLink:
         self.window = window
 
     def show_image(self, image: np.ndarray) -> None:
-        # Marshal to the GUI thread; calibration runs on a worker.
-        from PySide6.QtCore import QMetaObject, Q_ARG, Qt as _Qt  # noqa: N814
-
-        is_white = image.mean() > 250
-        QMetaObject.invokeMethod(self.window, "set_override_slot", _Qt.ConnectionType.BlockingQueuedConnection,
-                                 Q_ARG(object, None if is_white else image))
+        # Calibration runs on a worker thread; the window marshals this to the GUI thread.
+        is_white = image.mean() > 250  # the "back to white canvas" frame: resume normal scene rendering
+        self.window.show_image_threadsafe(None if is_white else image)
 
     def size(self) -> tuple[int, int]:
         return (self.window.renderer.width, self.window.renderer.height)

@@ -5,7 +5,7 @@ import logging
 from typing import Callable, Optional
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -24,8 +24,12 @@ def ndarray_to_qimage(bgr: np.ndarray) -> QImage:
 class ProjectionWindow(QWidget):
     """Displays frames from a ProjectionRenderer (or any override image) fullscreen."""
 
+    # Emitted by worker threads (calibration) to show a fixed image; delivered on the GUI thread.
+    override_requested = Signal(object)
+
     def __init__(self, renderer: ProjectionRenderer, fps: int = 60):
         super().__init__(None, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.override_requested.connect(self.set_override, Qt.ConnectionType.BlockingQueuedConnection)
         self.setWindowTitle("BRIDGE Projection")
         self.setCursor(Qt.CursorShape.BlankCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -72,6 +76,7 @@ class ProjectionWindow(QWidget):
         self.close()
 
     # -- content -----------------------------------------------------------------------
+    @Slot(object)
     def set_override(self, image: Optional[np.ndarray]) -> None:
         """Temporarily show a fixed image (e.g. calibration pattern) instead of the scene."""
         self._override = image
@@ -79,9 +84,12 @@ class ProjectionWindow(QWidget):
         # Force a synchronous repaint so a worker thread waiting on us sees the change on screen.
         self.repaint()
 
-    @Slot(object)
-    def set_override_slot(self, image: object) -> None:
-        self.set_override(image)  # type: ignore[arg-type]
+    def show_image_threadsafe(self, image: Optional[np.ndarray]) -> None:
+        """Show `image` (or None to resume the scene) from any thread; blocks until painted."""
+        if QThread.currentThread() is self.thread():
+            self.set_override(image)
+        else:
+            self.override_requested.emit(image)
 
     def current_frame(self) -> np.ndarray:
         return self._override if self._override is not None else self.renderer.render()

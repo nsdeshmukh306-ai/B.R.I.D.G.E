@@ -61,3 +61,42 @@ def test_calibration_wizard_flow(qapp):
     assert "2.8 px" in wiz.lbl_result.text() and wiz.btn_save.isEnabled()
     wiz._on_done(CalibrationResult(success=False, message="Calibration failed.\nPossible causes: ..."))
     assert not wiz.btn_save.isEnabled()
+
+
+def test_projection_window_accepts_images_from_worker_thread(qapp):
+    """Physical-mode calibration path: a worker thread pushes pattern images into the window."""
+    import threading
+    import time
+
+    from PySide6.QtCore import QTimer
+    from bridge.projector.window import ProjectionWindow
+    from bridge.render.renderer import ProjectionRenderer, calibration_pattern, solid
+    from bridge.spatial.geometry import Point
+    from bridge.ui.main_window import _WindowProjectorLink
+
+    w = ProjectionWindow(ProjectionRenderer(320, 180), fps=30)
+    w.show_windowed(320, 180)
+    link = _WindowProjectorLink(w)
+    seen = []
+    errors = []
+
+    def worker():
+        try:
+            link.show_image(calibration_pattern(320, 180, [Point(x=40, y=40)], 10))
+            seen.append(w.current_frame()[40, 40].tolist())
+            link.show_image(solid(320, 180, (255, 255, 255)))
+            seen.append(w._override)
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+
+    t = threading.Thread(target=worker)
+    QTimer.singleShot(50, t.start)
+    for _ in range(200):
+        qapp.processEvents()
+        if not t.is_alive() and (seen or errors):
+            break
+        time.sleep(0.01)
+    t.join(timeout=2)
+    assert not errors, errors
+    assert seen[0] == [255, 255, 255] and seen[1] is None
+    w.close_projection()

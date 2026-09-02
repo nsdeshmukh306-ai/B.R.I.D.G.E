@@ -1,0 +1,76 @@
+"""Spatial rendering primitives. All coordinates are PROJECTOR pixels."""
+from __future__ import annotations
+
+import uuid
+from typing import Literal, Optional, Union
+
+from pydantic import BaseModel, Field
+
+from bridge.spatial.geometry import Point
+
+RGB = tuple[int, int, int]
+
+
+class Style(BaseModel):
+    color: RGB = (0, 150, 255)
+    thickness: int = 4
+    dashed: bool = False
+    fill: bool = False
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    animation: Literal["none", "pulse", "flow", "blink"] = "none"
+
+
+class _Base(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:10])
+    style: Style = Field(default_factory=Style)
+    group: Optional[str] = None  # e.g. object id, so a group can be moved/cleared together
+
+
+class Circle(_Base):
+    kind: Literal["circle"] = "circle"
+    center: Point
+    radius: float = Field(gt=0)
+
+
+class Outline(_Base):
+    kind: Literal["outline"] = "outline"
+    points: list[Point]
+
+
+class Arrow(_Base):
+    kind: Literal["arrow"] = "arrow"
+    start: Point
+    end: Point
+
+
+class Dot(_Base):
+    kind: Literal["point"] = "point"
+    center: Point
+    radius: float = 8
+
+
+class Label(_Base):
+    kind: Literal["label"] = "label"
+    position: Point
+    text: str
+    font_scale: float = 0.9
+    background: bool = True
+
+
+class TargetZone(_Base):
+    kind: Literal["target_zone"] = "target_zone"
+    points: list[Point]  # polygon
+
+
+class Path(_Base):
+    kind: Literal["path"] = "path"
+    points: list[Point]
+
+
+class Message(_Base):
+    kind: Literal["message"] = "message"
+    text: str
+    position: Optional[Point] = None  # None = centered
+
+
+Primitive = Union[Circle, Outline, Arrow, Dot, Label, TargetZone, Path, Message]

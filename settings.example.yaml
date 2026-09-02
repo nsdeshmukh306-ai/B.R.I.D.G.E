@@ -1,0 +1,34 @@
+mode: physical
+profiles_dir: profiles
+log_dir: logs
+log_level: INFO
+camera:
+  preferred_device: null
+  width: 1280
+  height: 720
+  fps: 30
+projector:
+  preferred_display: null
+calibration:
+  method: planar_4point
+  validation_threshold_px: 10.0
+  marker_radius_px: 28
+  margin_fraction: 0.12
+  detection_min_confidence: 0.6
+  max_retries: 3
+tracking:
+  enabled: true
+  backend: csrt
+  lost_after_frames: 15
+  min_confidence: 0.3
+ai:
+  provider: gemini
+  model: gemini-2.5-flash
+  min_confidence: 0.5
+  timeout_s: 30.0
+render:
+  background: white
+  target_style: pulse
+  accent_rgb: [0, 150, 255]
+  line_width: 4
+  fps: 60

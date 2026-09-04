@@ -10,9 +10,9 @@ For a planar surface a single 3×3 homography `H` maps camera pixels to projecto
 
 ## Planar marker method (V1, `planar_4point` / `planar_9point`)
 
-1. Project a solid black frame; capture a **reference** image.
-2. For each layout point (4 corners inset by `margin_fraction`, or a 3×3 grid): project one bright white disc (`marker_radius_px`), capture, subtract the reference, threshold (Otsu), find the most circular blob, refine its centre with an intensity-weighted centroid.
-3. Projecting markers *one at a time* gives an unambiguous projector→camera correspondence. As a fallback the full pattern is projected and blobs are matched to the layout by angular order.
+1. Project a solid black frame (reference), then a solid white frame. The lit quadrilateral is the projector's **footprint** in the camera: its corners give a coarse homography and a region of interest, so reflections elsewhere in the room are ignored.
+2. For each layout point (4 corners inset by `margin_fraction`, or a 3×3 grid): project one bright white disc, capture, subtract the reference and find the blob nearest to where the coarse homography predicts it. Disc radius is at least 3 % of the projector's short edge (≈65 px on a 4K projector) and grows by 70 % on each retry, so markers stay visible even when a small webcam watches a 4K projection from across a room.
+3. Projecting markers *one at a time* plus the predicted position makes the correspondence unambiguous. If fewer than four discs are found but the footprint quad is clean, its corners are used as correspondences to the projector image corners.
 4. `cv2.findHomography(camera_points, projector_points)` (exact solve for 4 points, RANSAC for 9). Degenerate solutions are rejected.
 5. **Validation**: project an *independent* 3×3 grid (inset 25 %), detect, and compute reprojection error `|H·cam − proj|` per point. Stored as
 
@@ -20,7 +20,7 @@ For a planar surface a single 3×3 homography `H` maps camera pixels to projecto
 {"mean_error_px": 1.6, "max_error_px": 6.0, "median_error_px": 1.2, "n_points": 9, "threshold_px": 10.0, "valid": true}
 ```
 
-`valid` requires mean ≤ threshold, max ≤ 2.5 × threshold and ≥ 75 % inliers. The threshold is `calibration.validation_threshold_px` (default 10 px in projector space).
+Errors are measured in **camera pixels** (`mean_error_px`, `max_error_px`); projector-space values are kept alongside (`mean_error_proj_px`). One camera pixel can cover ten projector pixels when a 4K projector is watched by a 640 px webcam, so projector-space thresholds would be meaningless. `valid` requires mean ≤ threshold, max ≤ 2.5 × threshold and ≥ 75 % inliers; the threshold is `calibration.validation_threshold_px` (default 6 camera px). A calibration whose independent validation could not be measured is **never** marked valid, and profiles without an independent validation are never reloaded.
 
 6. The projector returns to the white canvas. On failure the engine retries up to `max_retries` times and reports the causes checklist.
 

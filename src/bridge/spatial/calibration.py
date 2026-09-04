@@ -12,11 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
+import cv2
 import numpy as np
 
 from bridge.spatial.geometry import Point, points_to_array
-from bridge.spatial.homography import HomographyError, Matrix3x3, compute_homography
-from bridge.spatial.markers import DetectedMarker, detect_bright_markers, match_markers_to_layout
+from bridge.spatial.homography import HomographyError, Matrix3x3, apply_homography, compute_homography
+from bridge.spatial.markers import DetectedMarker, detect_bright_markers, detect_projector_footprint
 from bridge.spatial.profile import CalibrationProfile, ProfileStore
 from bridge.spatial.validation import CalibrationValidator, ValidationResult
 
@@ -97,18 +98,26 @@ def marker_layout(width: int, height: int, n: int = 4, margin_fraction: float = 
 
 
 class PlanarMarkerCalibration(CalibrationMethod):
-    """Project bright discs one-at-a-time and all-at-once; detect them; fit a homography.
+    """Coarse-to-fine planar calibration with projected discs.
 
-    Projecting markers *individually* (in addition to the full pattern) gives an
-    unambiguous projector->camera correspondence that does not depend on
-    ordering heuristics, at the cost of a few extra frames.
+    1. Project black, then white: the lit quadrilateral is the projector's
+       footprint in the camera. Its corners give a *coarse* homography and a
+       region of interest, so marker search is confined to the surface.
+    2. Project one disc at a time at known projector positions. Each disc is
+       searched near where the coarse homography predicts it, so ordering is
+       never ambiguous and stray reflections elsewhere are ignored.
+    3. Fit the homography, then project an independent grid and measure the
+       reprojection error. A calibration is only VALID if that independent
+       validation succeeded - fit residuals are never used as a substitute.
+
+    Marker size scales with the projector resolution and grows on each retry.
     """
 
     name = "planar_4point"
 
     def __init__(self, n_points: int = 4, marker_radius: int = 28, margin_fraction: float = 0.12,
                  validation_threshold_px: float = 10.0, min_confidence: float = 0.6, max_retries: int = 3,
-                 settle_s: float = 0.3):
+                 settle_s: float = 0.4):
         self.n_points = n_points
         self.name = "planar_4point" if n_points == 4 else "planar_9point"
         self.marker_radius = marker_radius
@@ -117,54 +126,131 @@ class PlanarMarkerCalibration(CalibrationMethod):
         self.min_confidence = min_confidence
         self.max_retries = max_retries
         self.settle_s = settle_s
+        self._radius_scale = 1.0
+        self._footprint_mask: Optional[np.ndarray] = None
+        self._footprint_corners: Optional[np.ndarray] = None
+        self._H_coarse: Optional[np.ndarray] = None
+
+    # --- geometry helpers ----------------------------------------------------------------
+    def _radius(self, pw: int, ph: int) -> int:
+        """Disc radius in projector pixels: at least ~3% of the short edge, scaled per retry."""
+        base = max(self.marker_radius, int(0.03 * min(pw, ph)))
+        return int(base * self._radius_scale)
+
+    def _search_radius(self, cam_size: tuple[int, int]) -> float:
+        if self._footprint_corners is not None:
+            c = self._footprint_corners
+            diag = float(np.linalg.norm(c[2] - c[0]))
+            return max(12.0, 0.18 * diag)
+        return 0.2 * max(cam_size)
+
+    def _expected(self, p: Point) -> Optional[Point]:
+        if self._H_coarse is None:
+            return None
+        try:
+            H_inv = np.linalg.inv(self._H_coarse)  # camera->projector, so invert to predict camera position
+        except np.linalg.LinAlgError:
+            return None
+        out = apply_homography(H_inv, [p])[0]
+        return Point(x=float(out[0]), y=float(out[1]))
 
     # --- capture helpers ------------------------------------------------------------------
-    def _capture_marker(self, projector: ProjectorLink, camera: CameraLink, pw: int, ph: int, p: Point,
-                        reference: np.ndarray) -> Optional[DetectedMarker]:
-        from bridge.render.renderer import calibration_pattern
+    def _capture_footprint(self, projector: ProjectorLink, camera: CameraLink, pw: int, ph: int) -> tuple[np.ndarray, dict]:
+        """Black reference + white frame -> footprint mask, corners and coarse homography."""
+        from bridge.render.renderer import solid
 
-        projector.show_image(calibration_pattern(pw, ph, [p], self.marker_radius))
-        frame = camera.capture(self.settle_s)
-        if frame is None:
-            return None
-        dets = detect_bright_markers(frame, reference, expected_count=1)
-        if not dets or dets[0].confidence < self.min_confidence * 0.5:
-            return None
-        return dets[0]
-
-    def _collect(self, projector: ProjectorLink, camera: CameraLink, layout: list[Point],
-                 progress: Callable[[str, float], None] | None) -> tuple[list[Point], list[Point], dict]:
-        from bridge.render.renderer import calibration_pattern, solid
-
-        pw, ph = projector.size()
         debug: dict[str, np.ndarray] = {}
         projector.show_image(solid(pw, ph, (0, 0, 0)))
         reference = camera.capture(self.settle_s * 2)
         if reference is None:
             raise RuntimeError("camera returned no frame")
+        projector.show_image(solid(pw, ph, (255, 255, 255)))
+        white = camera.capture(self.settle_s * 2)
         debug["reference"] = reference
+        self._footprint_mask, self._footprint_corners, self._H_coarse = None, None, None
+        if white is not None:
+            debug["white"] = white
+            corners, mask = detect_projector_footprint(white, reference)
+            if mask is not None:
+                self._footprint_mask = cv2.dilate(mask, np.ones((15, 15), np.uint8))
+            if corners is not None:
+                try:
+                    proj_corners = np.array([[0, 0], [pw, 0], [pw, ph], [0, ph]], dtype=np.float64)
+                    self._H_coarse, _ = compute_homography(corners, proj_corners)
+                    self._footprint_corners = corners
+                    log.info("Projector footprint found in camera: %s", corners.astype(int).tolist())
+                except HomographyError:
+                    self._H_coarse = None
+            if mask is None:
+                log.warning("Projector footprint not visible to the camera (white frame gave no response)")
+        return reference, debug
+
+    def _capture_marker(self, projector: ProjectorLink, camera: CameraLink, pw: int, ph: int, p: Point,
+                        reference: np.ndarray) -> Optional[DetectedMarker]:
+        from bridge.render.renderer import calibration_pattern
+
+        projector.show_image(calibration_pattern(pw, ph, [p], self._radius(pw, ph)))
+        frame = camera.capture(self.settle_s)
+        if frame is None:
+            return None
+        dets = detect_bright_markers(frame, reference, roi_mask=self._footprint_mask)
+        if not dets:
+            return None
+        expected = self._expected(p)
+        if expected is not None:
+            r = self._search_radius(camera.size())
+            near = [d for d in dets if d.center.distance_to(expected) <= r]
+            if not near:
+                log.debug("marker at %s: %d blobs but none within %.0fpx of expected %s", p.as_int(), len(dets), r, expected.as_int())
+                return None
+            near.sort(key=lambda d: (d.center.distance_to(expected) / r) - d.confidence)
+            return near[0]
+        best = dets[0]
+        return best if best.confidence >= self.min_confidence * 0.3 else None
+
+    def _collect(self, projector: ProjectorLink, camera: CameraLink, layout: list[Point],
+                 progress: Callable[[str, float], None] | None) -> tuple[list[Point], list[Point], dict]:
+        from bridge.render.renderer import calibration_pattern
+
+        pw, ph = projector.size()
+        if progress:
+            progress("Locating projector footprint...", 0.08)
+        reference, debug = self._capture_footprint(projector, camera, pw, ph)
         cam_pts: list[Point] = []
         proj_pts: list[Point] = []
         for i, p in enumerate(layout):
             if progress:
-                progress(f"Detecting marker {i + 1}/{len(layout)}...", (i + 1) / (len(layout) + 1))
+                progress(f"Detecting marker {i + 1}/{len(layout)}...", 0.1 + 0.6 * (i + 1) / len(layout))
             det = self._capture_marker(projector, camera, pw, ph, p, reference)
             if det is not None:
                 cam_pts.append(det.center)
                 proj_pts.append(p)
-        # Also project the full pattern for a consistency check / debug image.
-        projector.show_image(calibration_pattern(pw, ph, layout, self.marker_radius))
+        # Debug image: camera view of the full pattern with detections annotated.
+        projector.show_image(calibration_pattern(pw, ph, layout, self._radius(pw, ph)))
         full = camera.capture(self.settle_s)
         if full is not None:
-            debug["pattern"] = full
-            if len(cam_pts) < len(layout):
-                # Fallback: all-at-once detection with geometric matching.
-                dets = detect_bright_markers(full, reference, expected_count=len(layout))
-                matched = match_markers_to_layout(dets, layout, camera.size())
-                if len(matched) == len(layout):
-                    cam_pts = [m.center for _, m in matched]
-                    proj_pts = [layout[i] for i, _ in matched]
+            debug["pattern"] = self._annotate(full, cam_pts, layout)
+        # Fallback: if markers were lost but the footprint quad is clean, its corners are
+        # exact correspondences to the projector image corners (as long as the image is not clipped).
+        if len(cam_pts) < 4 and self._footprint_corners is not None:
+            log.warning("Only %d markers detected; adding projector footprint corners as correspondences", len(cam_pts))
+            for (cx, cy), (px, py) in zip(self._footprint_corners, [(0, 0), (pw, 0), (pw, ph), (0, ph)]):
+                cam_pts.append(Point(x=float(cx), y=float(cy)))
+                proj_pts.append(Point(x=float(px), y=float(py)))
         return cam_pts, proj_pts, debug
+
+    def _annotate(self, frame: np.ndarray, cam_pts: list[Point], layout: list[Point]) -> np.ndarray:
+        img = frame.copy()
+        if self._footprint_corners is not None:
+            cv2.polylines(img, [self._footprint_corners.astype(np.int32)], True, (0, 200, 255), 1, cv2.LINE_AA)
+        for p in layout:
+            e = self._expected(p)
+            if e is not None:
+                cv2.drawMarker(img, e.as_int(), (0, 165, 255), cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+        for c in cam_pts:
+            cv2.circle(img, c.as_int(), 7, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(img, f"{len(cam_pts)} marker(s) detected", (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        return img
 
     # --- public ------------------------------------------------------------------------
     def calibrate(self, projector: ProjectorLink, camera: CameraLink,
@@ -176,7 +262,8 @@ class PlanarMarkerCalibration(CalibrationMethod):
         last_msg = ""
         debug: dict = {}
         for attempt in range(1, self.max_retries + 1):
-            log.info("Calibration started attempt=%d method=%s", attempt, self.name)
+            self._radius_scale = 1.0 + 0.7 * (attempt - 1)  # bigger discs on each retry
+            log.info("Calibration started attempt=%d method=%s marker_radius=%dpx", attempt, self.name, self._radius(pw, ph))
             if progress:
                 progress(f"Detecting surface... (attempt {attempt})", 0.05)
             try:
@@ -184,8 +271,10 @@ class PlanarMarkerCalibration(CalibrationMethod):
             except RuntimeError as e:
                 last_msg = str(e)
                 continue
+            n_markers = sum(1 for p in proj_pts if p in layout)
             if len(cam_pts) < 4:
-                last_msg = f"Only {len(cam_pts)} of {len(layout)} markers detected."
+                last_msg = (f"Only {n_markers} of {len(layout)} markers detected"
+                            + (" and the projector footprint was not visible." if self._footprint_mask is None else "."))
                 log.warning("Calibration attempt %d failed: %s", attempt, last_msg)
                 continue
             try:
@@ -193,19 +282,21 @@ class PlanarMarkerCalibration(CalibrationMethod):
             except HomographyError as e:
                 last_msg = str(e)
                 continue
-            fit = self.validator.validate(H, points_to_array(cam_pts), points_to_array(proj_pts), mask)
             if progress:
-                progress("Validating...", 0.9)
-            val = self.validate(projector, camera, H) if self.n_points == 4 else fit
-            # Use the independent validation when available, otherwise the fit residuals.
-            if not np.isfinite(val.mean_error_px):
-                val = fit
+                progress("Validating...", 0.85)
+            self._H_coarse = H  # validation markers are searched near their predicted positions
+            val = self.validate(projector, camera, H)
             projector.show_image(solid(pw, ph, (255, 255, 255)))
+            if not np.isfinite(val.mean_error_px):
+                last_msg = f"Validation markers not detected ({val.n_points} of 9 found); calibration not trusted."
+                log.warning("Calibration attempt %d: %s", attempt, last_msg)
+                continue
             result = CalibrationResult(success=val.valid, homography=Matrix3x3.from_numpy(H), validation=val,
                                        camera_points=cam_pts, projector_points=proj_pts, attempts=attempt,
                                        debug_frames=debug,
                                        message="" if val.valid else f"Reprojection error too high ({val.mean_error_px:.1f} px).")
-            log.info("Calibration complete error=%.2fpx valid=%s", val.mean_error_px, val.valid)
+            log.info("Calibration complete error=%.2fpx max=%.2fpx n=%d valid=%s", val.mean_error_px, val.max_error_px,
+                     val.n_points, val.valid)
             if val.valid:
                 return result
             last_msg = result.message
@@ -215,7 +306,7 @@ class PlanarMarkerCalibration(CalibrationMethod):
                                  debug_frames=debug)
 
     def validate(self, projector: ProjectorLink, camera: CameraLink, H: np.ndarray) -> ValidationResult:
-        """Project independent validation points (a 3x3 grid inset differently) and measure."""
+        """Project an independent 3x3 grid (inset 25%) and measure reprojection error against H."""
         from bridge.render.renderer import solid
 
         pw, ph = projector.size()
@@ -231,8 +322,11 @@ class PlanarMarkerCalibration(CalibrationMethod):
                     proj_pts.append(p)
         if len(cam_pts) < 4:
             return ValidationResult(mean_error_px=float("inf"), max_error_px=float("inf"), median_error_px=float("inf"),
-                                    n_points=len(cam_pts), threshold_px=self.validator.threshold_px, valid=False, inlier_ratio=0.0)
-        return self.validator.validate(H, points_to_array(cam_pts), points_to_array(proj_pts))
+                                    n_points=len(cam_pts), threshold_px=self.validator.threshold_px, valid=False,
+                                    inlier_ratio=0.0, independent=True)
+        res = self.validator.validate(H, points_to_array(cam_pts), points_to_array(proj_pts))
+        res.independent = True
+        return res
 
 
 def build_method(name: str, **kw) -> CalibrationMethod:

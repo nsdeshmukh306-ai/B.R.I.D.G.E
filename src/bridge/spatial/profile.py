@@ -100,6 +100,7 @@ class ProfileStore:
         best: Optional[CalibrationProfile] = None
         for prof in self.list():
             ok, _ = prof.matches_hardware(camera_id, camera_res, display_id, display_res)
-            if ok and prof.validation.valid and (best is None or prof.created_at > best.created_at):
+            trusted = prof.validation.valid and prof.validation.independent and prof.validation.n_points >= 4
+            if ok and trusted and (best is None or prof.created_at > best.created_at):
                 best = prof
         return best

@@ -122,7 +122,7 @@ class CalibrationWizard(QDialog):
             self.lbl_result_title.setText("Calibration complete")
             self.lbl_result_title.setStyleSheet("color: #3ddc97;")
             self.lbl_result.setText(
-                f"Accuracy: {v.mean_error_px:.1f} px (max {v.max_error_px:.1f} px, n={v.n_points})\n"
+                f"Accuracy: {v.mean_error_px:.1f} camera px (max {v.max_error_px:.1f} px, n={v.n_points} validation points)\n"
                 f"Workspace detected\nProjector: {self.display_name}\nCamera: {self.camera_name}\nAttempts: {result.attempts}")
             self.btn_save.setEnabled(True)
         else:

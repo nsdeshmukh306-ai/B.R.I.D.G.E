@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -24,25 +25,77 @@ class DetectedMarker:
     confidence: float
 
 
+def _difference(frame: np.ndarray, reference: np.ndarray | None) -> np.ndarray:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    if reference is None:
+        return gray
+    ref = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY) if reference.ndim == 3 else reference
+    return cv2.subtract(gray, ref)
+
+
+def detect_projector_footprint(
+    white_frame: np.ndarray, black_frame: np.ndarray, min_area_fraction: float = 0.01
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Find the illuminated quadrilateral (projector image) in the camera view.
+
+    Returns (corners, mask): corners is a 4x2 float array ordered TL, TR, BR, BL
+    (None if no clean quad was found), mask is the filled footprint region
+    (uint8 0/255; None if nothing lit up).
+    """
+    diff = cv2.GaussianBlur(_difference(white_frame, black_frame), (7, 7), 0)
+    thr, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if thr < 8:
+        return None, None
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None, None
+    c = max(contours, key=cv2.contourArea)
+    h, w = mask.shape[:2]
+    if cv2.contourArea(c) < min_area_fraction * w * h:
+        return None, None
+    region = np.zeros_like(mask)
+    cv2.drawContours(region, [c], -1, 255, -1)
+    hull = cv2.convexHull(c)
+    peri = cv2.arcLength(hull, True)
+    corners = None
+    for eps in (0.02, 0.04, 0.06, 0.08):
+        approx = cv2.approxPolyDP(hull, eps * peri, True)
+        if len(approx) == 4:
+            corners = order_quad(approx.reshape(4, 2).astype(np.float64))
+            break
+    return corners, region
+
+
+def order_quad(pts: np.ndarray) -> np.ndarray:
+    """Order 4 points as TL, TR, BR, BL."""
+    s = pts.sum(axis=1)
+    d = pts[:, 0] - pts[:, 1]
+    tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+    tr, bl = pts[np.argmax(d)], pts[np.argmin(d)]
+    return np.array([tl, tr, br, bl], dtype=np.float64)
+
+
 def detect_bright_markers(
     frame: np.ndarray,
     reference: np.ndarray | None = None,
     expected_count: int | None = None,
-    min_area: float = 30.0,
-    min_circularity: float = 0.5,
+    min_area: float = 8.0,
+    min_circularity: float = 0.35,
+    roi_mask: np.ndarray | None = None,
 ) -> list[DetectedMarker]:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-    if reference is not None:
-        ref = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY) if reference.ndim == 3 else reference
-        diff = cv2.subtract(gray, ref)
-    else:
-        diff = gray
-    diff = cv2.GaussianBlur(diff, (5, 5), 0)
-    # Otsu on the difference image; fall back to a fixed threshold when the image is flat.
-    thr_val, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    if thr_val < 15:  # nothing meaningfully bright
-        _, mask = cv2.threshold(diff, 60, 255, cv2.THRESH_BINARY)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    diff = _difference(frame, reference)
+    if roi_mask is not None:
+        diff = cv2.bitwise_and(diff, diff, mask=roi_mask)
+    diff = cv2.GaussianBlur(diff, (3, 3), 0)
+    peak = int(diff.max()) if diff.size else 0
+    if peak < 12:  # nothing meaningfully bright
+        return []
+    # Threshold relative to the brightest response: robust to small, dim, blurred discs.
+    thr = max(10, int(peak * 0.45))
+    _, mask = cv2.threshold(diff, thr, 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     out: list[DetectedMarker] = []
     for c in contours:
@@ -60,14 +113,15 @@ def detect_bright_markers(
         # Refine centre with intensity-weighted centroid inside the contour.
         x, y, w, h = cv2.boundingRect(c)
         roi = diff[y:y + h, x:x + w].astype(np.float64)
-        roi_mask = np.zeros_like(roi)
-        cv2.drawContours(roi_mask, [c - [x, y]], -1, 1.0, -1)
-        weights = roi * roi_mask
+        contour_mask = np.zeros_like(roi)
+        cv2.drawContours(contour_mask, [c - [x, y]], -1, 1.0, -1)
+        weights = roi * contour_mask
         if weights.sum() > 0:
             ys, xs = np.mgrid[0:h, 0:w]
             cx = x + float((xs * weights).sum() / weights.sum())
             cy = y + float((ys * weights).sum() / weights.sum())
-        conf = float(min(1.0, circ) * min(1.0, area / (min_area * 4)))
+        brightness = float(diff[int(cy), int(cx)]) / 255.0 if 0 <= int(cy) < diff.shape[0] and 0 <= int(cx) < diff.shape[1] else 0.5
+        conf = float(min(1.0, circ) * min(1.0, area / (min_area * 3)) * (0.5 + 0.5 * brightness))
         out.append(DetectedMarker(center=Point(x=cx, y=cy), area=float(area), circularity=float(circ), confidence=conf))
     out.sort(key=lambda d: d.area, reverse=True)
     if expected_count is not None and len(out) > expected_count:

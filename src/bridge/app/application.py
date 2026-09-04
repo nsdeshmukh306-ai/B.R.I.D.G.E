@@ -42,7 +42,7 @@ class _CameraLink:
         if settle_s > 0:
             time.sleep(settle_s)  # let the projector/camera exposure settle
         # Only accept a frame captured after the projected image changed.
-        return self.cam.wait_for_fresh_frame(seq, skip=2)
+        return self.cam.wait_for_fresh_frame(seq, skip=3)
 
     def size(self) -> tuple[int, int]:
         return self.cam.resolution

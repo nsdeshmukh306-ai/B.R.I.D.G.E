@@ -28,7 +28,7 @@ class ProjectorSettings(BaseModel):
 
 class CalibrationSettings(BaseModel):
     method: str = "planar_4point"
-    validation_threshold_px: float = 10.0
+    validation_threshold_px: float = 6.0  # camera pixels, measured on independent points
     marker_radius_px: int = 28
     margin_fraction: float = 0.12
     detection_min_confidence: float = 0.6

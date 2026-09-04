@@ -14,9 +14,11 @@ def test_validator_known_transform_gives_expected_error():
     H, _ = compute_homography(src, dst)
     # perturb targets by exactly 3 px in x
     res = CalibrationValidator(threshold_px=5).validate(H, src, dst + np.array([3.0, 0.0]))
-    assert abs(res.mean_error_px - 3.0) < 1e-6 and abs(res.max_error_px - 3.0) < 1e-6
+    # 3 px in projector space is 1.5 px in camera space for a 2x homography
+    assert abs(res.mean_error_px - 1.5) < 1e-6 and abs(res.max_error_px - 1.5) < 1e-6
+    assert abs(res.mean_error_proj_px - 3.0) < 1e-6
     assert res.valid
-    res_bad = CalibrationValidator(threshold_px=2).validate(H, src, dst + np.array([3.0, 0.0]))
+    res_bad = CalibrationValidator(threshold_px=1).validate(H, src, dst + np.array([3.0, 0.0]))
     assert not res_bad.valid
 
 
@@ -100,3 +102,66 @@ def test_profile_store_round_trip_and_hardware_matching(tmp_path, sim, cam_link)
 def test_corrupt_profile_is_skipped(tmp_path):
     (tmp_path / "bad.json").write_text("{not json")
     assert ProfileStore(tmp_path).list() == []
+
+
+def _harsh_setup():
+    """4K projector, 640x480 camera, projection under half the frame, dark room, noisy sensor."""
+    from bridge.simulation.world import SimulatedCamera, SimulatedProjector, VirtualWorld
+
+    world = VirtualWorld()
+    proj = SimulatedProjector(width=3840, height=2160, world=world, brightness=0.55)
+    cam = SimulatedCamera(world, proj, width=640, height=480,
+                          camera_quad=np.array([[120, 110], [520, 120], [540, 380], [100, 370]], np.float32),
+                          noise_sigma=5.0, ambient=0.12, seed=3)
+
+    class Link:
+        def capture(self, settle_s=0.0):
+            return cam.render()
+
+        def size(self):
+            return cam.resolution
+
+    return proj, cam, Link()
+
+
+def test_calibration_survives_4k_projector_and_small_dark_camera():
+    proj, cam, link = _harsh_setup()
+    res = PlanarMarkerCalibration(settle_s=0).calibrate(proj, link)
+    assert res.success, res.message
+    assert res.validation.independent and res.validation.n_points >= 4
+    assert res.validation.mean_error_px < 2.0  # camera pixels
+    H = res.homography.to_numpy()
+    G = cam.ground_truth_cam_to_proj()
+    pts = np.array([[200, 150], [320, 240], [450, 330], [150, 350]], float)
+    err_proj = np.linalg.norm(apply_homography(H, pts) - apply_homography(G, pts), axis=1)
+    assert err_proj.max() < 25  # < 2.5 camera px at ~10 projector px per camera px
+    assert "pattern" in res.debug_frames
+
+
+def test_footprint_detection_gives_ordered_corners():
+    from bridge.spatial.markers import detect_projector_footprint
+
+    proj, cam, link = _harsh_setup()
+    from bridge.render.renderer import solid
+
+    proj.show_image(solid(3840, 2160, (0, 0, 0)))
+    black = cam.render()
+    proj.show_image(solid(3840, 2160, (255, 255, 255)))
+    white = cam.render()
+    corners, mask = detect_projector_footprint(white, black)
+    assert corners is not None and mask is not None
+    tl, tr, br, bl = corners
+    assert tl[0] < tr[0] and bl[0] < br[0] and tl[1] < bl[1] and tr[1] < br[1]
+
+
+def test_profile_without_independent_validation_is_not_trusted(tmp_path):
+    from bridge.spatial.homography import Matrix3x3
+    from bridge.spatial.validation import ValidationResult
+
+    # A zero-error result from an exact 4-point fit (the bug seen on real hardware) must never be reused.
+    bogus = ValidationResult(mean_error_px=0.0, max_error_px=0.0, median_error_px=0.0, n_points=4,
+                             threshold_px=10, valid=True, independent=False)
+    store = ProfileStore(tmp_path)
+    store.save(CalibrationProfile(name="bad", camera_id="c", camera_resolution=(640, 480), display_id="d",
+                                  display_resolution=(3840, 2160), homography=Matrix3x3.identity(), validation=bogus))
+    assert store.find_matching("c", (640, 480), "d", (3840, 2160)) is None

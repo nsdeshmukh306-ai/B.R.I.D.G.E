@@ -12,9 +12,11 @@ Desktop (PySide6) app: commodity camera + commodity projector + Gemini → spati
 - No vendor-specific hardware code. Cameras are OpenCV indices; projectors are OS displays.
 - Secrets come from the environment / `.env` only.
 - Mock/simulation AI providers (`ai/mock.py`) are for tests and simulation mode only; never in the physical path.
+- Healthcare safety: dosing/diagnosis requests are declined in `healthcare/safety.py` before the AI; cautions for sharps/medications are appended to spoken replies. Keep it that way.
+- Voice: `BridgeCore.handle_spoken(text) -> reply` is the single entry point; procedure control words are handled before the AI pipeline.
 
 ## Layout
-`src/bridge/{app,camera,projector,spatial,vision,ai,interaction,render,simulation,ui}`, `tests/`, `docs/`, `profiles/` (git-ignored JSON calibration profiles).
+`src/bridge/{app,camera,projector,spatial,vision,ai,interaction,render,simulation,voice,healthcare,ui}`, `tests/`, `docs/`, `profiles/` (git-ignored JSON calibration profiles), `procedures/` (optional custom procedure JSON).
 
 ## Commands
 ```bash

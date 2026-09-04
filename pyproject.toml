@@ -19,11 +19,14 @@ dependencies = [
     "pyyaml>=6.0",
     "google-genai>=1.0",
     "screeninfo>=0.8",
+    "sounddevice>=0.4",
+    "pyttsx3>=2.90",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-timeout>=2.3"]
 hands = ["mediapipe>=0.10"]
+offline-stt = ["faster-whisper>=1.0"]
 
 [project.scripts]
 bridge = "bridge.main:main"

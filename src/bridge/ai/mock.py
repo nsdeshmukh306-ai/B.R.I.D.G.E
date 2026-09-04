@@ -56,6 +56,7 @@ PLURAL_ONLY = {"scissors", "pliers", "tweezers", "glasses", "tongs"}
 
 
 def _strip_target(q: str) -> str:
+    q = re.sub(r"\s*\([^)]*\)", "", q).strip()  # drop parenthetical hints
     q = re.sub(r"^(where is|where are|where's|find|locate|highlight|circle|mark|point to|point at|label|name|show me|show)\s+", "", q)
     q = re.sub(r"^(the|a|an|all|every|all the|all of the)\s+", "", q)
     q = re.sub(r"\s+(please|now|for me)$", "", q)

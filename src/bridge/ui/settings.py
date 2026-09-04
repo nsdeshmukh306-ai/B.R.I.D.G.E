@@ -69,6 +69,35 @@ class SettingsDialog(QDialog):
         form.addRow("Camera width", self.cam_w)
         form.addRow("Camera height", self.cam_h)
 
+        v = s.voice
+        self.voice_enabled = QComboBox()
+        self.voice_enabled.addItems(["on", "off"])
+        self.voice_enabled.setCurrentText("on" if v.enabled else "off")
+        form.addRow("Voice: auto-listen when ready", self.voice_enabled)
+        self.stt = QComboBox()
+        self.stt.addItems(["gemini", "whisper", "mock"])
+        self.stt.setCurrentText(v.stt_provider)
+        form.addRow("Speech recognition", self.stt)
+        self.wake_word = QLineEdit(v.wake_word)
+        form.addRow("Wake word", self.wake_word)
+        self.tts_rate = QSpinBox()
+        self.tts_rate.setRange(80, 320)
+        self.tts_rate.setValue(v.tts_rate)
+        form.addRow("Speech rate (wpm)", self.tts_rate)
+        self.tts_voice = QLineEdit(v.tts_voice or "")
+        self.tts_voice.setPlaceholderText("e.g. Zira, David, Hemant (installed Windows voices)")
+        form.addRow("Voice name contains", self.tts_voice)
+        self.vad = QDoubleSpinBox()
+        self.vad.setRange(0.002, 0.2)
+        self.vad.setDecimals(3)
+        self.vad.setSingleStep(0.002)
+        self.vad.setValue(v.vad_threshold)
+        form.addRow("Mic sensitivity threshold (lower = more sensitive)", self.vad)
+        self.domain = QComboBox()
+        self.domain.addItems(["healthcare", "general"])
+        self.domain.setCurrentText(s.domain)
+        form.addRow("Domain knowledge", self.domain)
+
         self.log_level = QComboBox()
         self.log_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         self.log_level.setCurrentText(s.log_level.upper())
@@ -94,5 +123,12 @@ class SettingsDialog(QDialog):
         s.ai.min_confidence = self.ai_conf.value()
         s.camera.width, s.camera.height = self.cam_w.value(), self.cam_h.value()
         s.log_level = self.log_level.currentText()
+        s.voice.enabled = self.voice_enabled.currentText() == "on"
+        s.voice.stt_provider = self.stt.currentText()  # type: ignore[assignment]
+        s.voice.wake_word = self.wake_word.text().strip() or "bridge"
+        s.voice.tts_rate = self.tts_rate.value()
+        s.voice.tts_voice = self.tts_voice.text().strip() or None
+        s.voice.vad_threshold = self.vad.value()
+        s.domain = self.domain.currentText()  # type: ignore[assignment]
         self.config.save()
         self.accept()

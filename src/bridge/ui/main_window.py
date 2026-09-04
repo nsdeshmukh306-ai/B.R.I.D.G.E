@@ -7,7 +7,7 @@ from typing import Optional
 import numpy as np
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
+    QButtonGroup, QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
     QRadioButton, QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
@@ -25,10 +25,12 @@ from bridge.ui.widgets import ImageView, LogPanel, run_in_background
 
 log = logging.getLogger("bridge.ui")
 
-WELCOME = ("WELCOME TO BRIDGE\n\nConnect:\n  1. Camera\n  2. Projector\n\nThen press SET UP BRIDGE — or switch to "
+WELCOME = ("WELCOME TO BRIDGE\n\nConnect:\n  1. Camera\n  2. Projector\n\nThen OPEN PROJECTION and AUTO CALIBRATE — or switch to "
            "Simulation mode to try everything without hardware.")
-READY = ('BRIDGE READY\n\nYour physical environment is now an AI interface.\n\nTry:\n  "Where is the screwdriver?"\n'
-         '  "Highlight the red object."\n  "Point to the scissors."\n  "Where are the screws?"')
+READY = ('BRIDGE READY — say it, or type it\n\nTry:\n  "Where is the syringe?"       "Point to the sharps container."\n'
+         '  "Highlight the lavender tube."   "Where should I put the needle?"\n'
+         '  "Start the order of draw."      then "next", "repeat", "back", "stop".\n\n'
+         'BRIDGE locates items and guides protocol steps. It does not diagnose, prescribe or decide doses.')
 
 
 class _WindowProjectorLink:
@@ -48,17 +50,22 @@ class _WindowProjectorLink:
 
 class MainWindow(QMainWindow):
     status_signal = Signal(str, str)
+    voice_signal = Signal(object)
+    step_signal = Signal(object, int, int)
 
     def __init__(self, core: BridgeCore):
         super().__init__()
         self.core = core
-        self.setWindowTitle("BRIDGE — Universal Spatial AI")
+        self.setWindowTitle("BRIDGE — Spatial AI for Healthcare")
         self.resize(1320, 820)
         self.projection: Optional[ProjectionWindow] = None
         self._drag_obj: Optional[str] = None
         self._build()
         self._wire_events()
         self.status_signal.connect(self._on_status)
+        self.voice_signal.connect(self._on_voice_event)
+        self.step_signal.connect(self._on_step)
+        self._ptt_capture = None
         self._ui_timer = QTimer(self)
         self._ui_timer.setInterval(66)
         self._ui_timer.timeout.connect(self._refresh)
@@ -82,7 +89,7 @@ class MainWindow(QMainWindow):
         pl.setSpacing(10)
         title = QLabel("BRIDGE")
         title.setObjectName("title")
-        sub = QLabel("Universal Spatial AI")
+        sub = QLabel("Spatial AI assistant for healthcare workspaces")
         sub.setObjectName("subtitle")
         pl.addWidget(title)
         pl.addWidget(sub)
@@ -169,12 +176,16 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_load_profile)
         row.addWidget(self.btn_validate)
         gl.addLayout(row)
+        self.lbl_trim = QLabel("Registration trim: 0, 0 px  (test mode: arrow keys nudge, Shift = ×10, R = reset)")
+        self.lbl_trim.setObjectName("subtitle")
+        self.lbl_trim.setWordWrap(True)
+        gl.addWidget(self.lbl_trim)
         pl.addWidget(g)
 
         g = QGroupBox("AI COMMAND")
         gl = QVBoxLayout(g)
         self.edit_cmd = QLineEdit()
-        self.edit_cmd.setPlaceholderText("Where is the screwdriver?")
+        self.edit_cmd.setPlaceholderText("Where is the syringe?")
         self.edit_cmd.returnPressed.connect(self.execute_command)
         gl.addWidget(self.edit_cmd)
         row = QHBoxLayout()
@@ -194,6 +205,65 @@ class MainWindow(QMainWindow):
         self.lbl_ai_result.setWordWrap(True)
         self.lbl_ai_result.setObjectName("subtitle")
         gl.addWidget(self.lbl_ai_result)
+        pl.addWidget(g)
+
+        g = QGroupBox("VOICE")
+        gl = QVBoxLayout(g)
+        row = QHBoxLayout()
+        self.btn_listen = QPushButton("🎙  LISTEN")
+        self.btn_listen.setObjectName("accent")
+        self.btn_listen.setCheckable(True)
+        self.btn_listen.toggled.connect(self._toggle_listen)
+        self.btn_ptt = QPushButton("Push to talk")
+        self.btn_ptt.setToolTip("Hold to capture one command (or use the Space bar while the window has focus)")
+        self.btn_ptt.pressed.connect(self._ptt_pressed)
+        self.btn_ptt.released.connect(self._ptt_released)
+        row.addWidget(self.btn_listen, 2)
+        row.addWidget(self.btn_ptt, 1)
+        gl.addLayout(row)
+        row = QHBoxLayout()
+        self.chk_wake = QCheckBox("Require wake word")
+        self.chk_wake.setChecked(self.core.settings.voice.require_wake_word)
+        self.chk_wake.toggled.connect(self._on_wake_toggle)
+        self.chk_speak = QCheckBox("Speak replies")
+        self.chk_speak.setChecked(self.core.settings.voice.tts_enabled)
+        self.chk_speak.toggled.connect(self._on_speak_toggle)
+        row.addWidget(self.chk_wake)
+        row.addWidget(self.chk_speak)
+        gl.addLayout(row)
+        self.lbl_voice_state = QLabel("Voice: off")
+        self.lbl_voice_state.setObjectName("subtitle")
+        gl.addWidget(self.lbl_voice_state)
+        self.lbl_transcript = QLabel("")
+        self.lbl_transcript.setWordWrap(True)
+        self.lbl_transcript.setObjectName("mono")
+        gl.addWidget(self.lbl_transcript)
+        pl.addWidget(g)
+
+        g = QGroupBox("PROCEDURE")
+        gl = QVBoxLayout(g)
+        self.cb_procedure = QComboBox()
+        for pid, name in self.core.procedures.names():
+            self.cb_procedure.addItem(name, pid)
+        gl.addWidget(self.cb_procedure)
+        row = QHBoxLayout()
+        self.btn_proc_start = QPushButton("START")
+        self.btn_proc_start.setObjectName("primary")
+        self.btn_proc_start.clicked.connect(lambda: self._proc_cmd("start"))
+        self.btn_proc_back = QPushButton("◀ Back")
+        self.btn_proc_back.clicked.connect(lambda: self._proc_cmd("back"))
+        self.btn_proc_next = QPushButton("Next ▶")
+        self.btn_proc_next.clicked.connect(lambda: self._proc_cmd("next"))
+        self.btn_proc_stop = QPushButton("Stop")
+        self.btn_proc_stop.setObjectName("danger")
+        self.btn_proc_stop.clicked.connect(lambda: self._proc_cmd("stop procedure"))
+        for b in (self.btn_proc_start, self.btn_proc_back, self.btn_proc_next, self.btn_proc_stop):
+            row.addWidget(b)
+        gl.addLayout(row)
+        self.lbl_step = QLabel("No procedure running.")
+        self.lbl_step.setWordWrap(True)
+        self.lbl_step.setObjectName("mono")
+        gl.addWidget(self.lbl_step)
         pl.addWidget(g)
 
         row = QHBoxLayout()
@@ -266,6 +336,8 @@ class MainWindow(QMainWindow):
         bus.subscribe(Topic.STATUS_MESSAGE, lambda e: self.status_signal.emit(e.payload.get("text", ""), e.payload.get("level", "info")))
         bus.subscribe(Topic.CALIBRATION_INVALIDATED, lambda e: self.status_signal.emit(e.payload.get("reason", ""), "warning"))
         bus.subscribe(Topic.TRACKING_LOST, lambda e: self.status_signal.emit("Target lost.", "warning"))
+        bus.subscribe(Topic.VOICE_EVENT, lambda e: self.voice_signal.emit(e.payload["event"]))
+        bus.subscribe(Topic.PROCEDURE_STEP, lambda e: self.step_signal.emit(e.payload["step"], e.payload["index"], e.payload["total"]))
 
     def _on_status(self, text: str, level: str) -> None:
         self.statusBar().showMessage(text, 8000)
@@ -443,6 +515,151 @@ class MainWindow(QMainWindow):
     def clear_projection(self) -> None:
         self.core.execute(ClearProjection()) if self.core.cameras.is_open else self.core.executor.clear()
 
+    # ---- voice ---------------------------------------------------------------------------------------
+    def _toggle_listen(self, on: bool) -> None:
+        if on:
+            ok, msg = self.core.start_voice()
+            if not ok:
+                self.btn_listen.setChecked(False)
+                self.lbl_voice_state.setText(f"Voice: {msg}")
+                QMessageBox.warning(self, "BRIDGE voice", msg)
+                return
+            self.btn_listen.setText("🎙  LISTENING")
+        else:
+            self.core.stop_voice()
+            self.btn_listen.setText("🎙  LISTEN")
+            self.lbl_voice_state.setText("Voice: off")
+
+    def _on_voice_event(self, ev) -> None:
+        state = ev.state.value
+        self.lbl_voice_state.setText(f"Voice: {state}" + (f"  ({ev.detail})" if ev.detail else ""))
+        if ev.transcript is not None and ev.transcript.text:
+            self.lbl_transcript.setText(f"> {ev.transcript.text}" + (f"\n  {ev.response}" if ev.response else ""))
+        if ev.response:
+            self.lbl_ai_result.setText(ev.response)
+
+    def _on_wake_toggle(self, on: bool) -> None:
+        self.core.settings.voice.require_wake_word = on
+        if self.core.voice is not None:
+            self.core.voice.require_wake_word = on
+
+    def _on_speak_toggle(self, on: bool) -> None:
+        self.core.settings.voice.tts_enabled = on
+        if self.core._tts is not None and not on:
+            from bridge.voice.tts import SilentTTS
+
+            self.core._tts = SilentTTS()
+            if self.core.voice is not None:
+                self.core.voice.tts = self.core._tts
+        elif on:
+            from bridge.voice.tts import build_tts
+
+            v = self.core.settings.voice
+            self.core._tts = build_tts(True, v.tts_rate, v.tts_voice)
+            if self.core.voice is not None:
+                self.core.voice.tts = self.core._tts
+
+    def _ptt_pressed(self) -> None:
+        """Push-to-talk: capture from the mic until release, then run one command."""
+        from bridge.voice.audio import MicrophoneSource
+
+        if self.core.voice is None or not self.core.voice.running:
+            try:
+                self._ptt_source = MicrophoneSource(self.core.settings.voice.mic_device)
+            except RuntimeError as e:
+                self.lbl_voice_state.setText(f"Voice: {e}")
+                return
+            self.lbl_voice_state.setText("Voice: push-to-talk (recording)")
+            self._ptt_chunks = []
+            import threading
+
+            def rec():
+                for c in self._ptt_source.chunks():
+                    self._ptt_chunks.append(c)
+
+            self._ptt_thread = threading.Thread(target=rec, daemon=True)
+            self._ptt_thread.start()
+
+    def _ptt_released(self) -> None:
+        src = getattr(self, "_ptt_source", None)
+        if src is None:
+            return
+        src.close()
+        self._ptt_source = None
+        import numpy as np
+        import time
+
+        from bridge.voice.audio import Utterance
+
+        chunks = getattr(self, "_ptt_chunks", [])
+        if not chunks:
+            return
+        samples = np.concatenate(chunks)
+        utt = Utterance(samples, src.sample_rate, time.time(), len(samples) / src.sample_rate, 0.0)
+        if self.core.voice is None:
+            ok, msg = self.core.start_voice()
+            if ok:
+                self.core.stop_voice()  # we only needed the STT/TTS objects
+        va = self.core.voice
+        if va is None:
+            from bridge.voice.assistant import VoiceAssistant
+            from bridge.voice.stt import build_stt
+            from bridge.voice.tts import build_tts
+
+            try:
+                stt = build_stt(self.core.settings.voice.stt_provider, self.core.config.secrets.gemini_api_key, self.core.settings.ai.model)
+            except Exception as e:  # noqa: BLE001
+                self.lbl_voice_state.setText(f"Voice: {e}")
+                return
+            if self.core._tts is None:
+                v = self.core.settings.voice
+                self.core._tts = build_tts(v.tts_enabled, v.tts_rate, v.tts_voice)
+            va = VoiceAssistant(lambda: src, stt, self.core._tts, self.core.handle_spoken,
+                                wake_word=self.core.settings.voice.wake_word, require_wake_word=False,
+                                on_event=lambda e: self.voice_signal.emit(e))
+        run_in_background(lambda: va.process_utterance(utt), lambda r: None)
+
+    # ---- procedures ----------------------------------------------------------------------------------
+    def _proc_cmd(self, word: str) -> None:
+        if word == "start":
+            pid = self.cb_procedure.currentData()
+            proc = self.core.procedures.get(pid)
+            if proc is None:
+                return
+            if not self.core.state.is_ready:
+                self.statusBar().showMessage("Spatial calibration required.", 5000)
+                return
+            self.lbl_step.setText(f"Starting {proc.name}...")
+            run_in_background(lambda: self.core.guide.start(proc), self._proc_reply)
+        else:
+            run_in_background(lambda: self.core.handle_spoken(word), self._proc_reply)
+
+    def _proc_reply(self, reply) -> None:
+        if reply:
+            self.lbl_ai_result.setText(str(reply))
+            self.core.speak(str(reply))
+
+    def _on_step(self, step, index: int, total: int) -> None:
+        if step is None:
+            self.lbl_step.setText("Procedure complete." if total and index >= total else "No procedure running.")
+        else:
+            self.lbl_step.setText(f"Step {index + 1}/{total}: {step.instruction}" + (f"\n⚠ {step.caution}" if step.caution else ""))
+
+    # ---- registration trim ---------------------------------------------------------------------------
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self.btn_validate.isChecked() and self.core.state.is_ready:
+            step = 10.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1.0
+            moves = {Qt.Key.Key_Left: (-step, 0), Qt.Key.Key_Right: (step, 0), Qt.Key.Key_Up: (0, -step), Qt.Key.Key_Down: (0, step)}
+            if event.key() in moves:
+                dx, dy = self.core.nudge_registration(*moves[event.key()])
+                self.lbl_trim.setText(f"Registration trim: {dx:.0f}, {dy:.0f} px  (arrow keys nudge, Shift = ×10, R = reset)")
+                return
+            if event.key() == Qt.Key.Key_R:
+                self.core.reset_registration_trim()
+                self.lbl_trim.setText("Registration trim: 0, 0 px  (arrow keys nudge, Shift = ×10, R = reset)")
+                return
+        super().keyPressEvent(event)
+
     # ---- mode ----------------------------------------------------------------------------------------
     def _on_mode_changed(self) -> None:
         sim = self.rb_sim.isChecked()
@@ -490,6 +707,12 @@ class MainWindow(QMainWindow):
 
     def _update_banner(self) -> None:
         self.lbl_banner.setText(READY if self.core.state.is_ready else WELCOME)
+        dx, dy = self.core.registration_trim
+        self.lbl_trim.setText(f"Registration trim: {dx:.0f}, {dy:.0f} px  (test mode: arrow keys nudge, Shift = ×10, R = reset)")
+        if self.core.state.is_ready and self.core.settings.voice.enabled and not self.btn_listen.isChecked() \
+                and self.core.state.mode == "physical" and not getattr(self, "_voice_autostarted", False):
+            self._voice_autostarted = True
+            self.btn_listen.setChecked(True)
 
     def open_settings(self) -> None:
         dlg = SettingsDialog(self.core.config, self)

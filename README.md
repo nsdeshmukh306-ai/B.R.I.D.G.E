@@ -1,18 +1,22 @@
-# BRIDGE — Universal Spatial AI Projection Platform
+# BRIDGE — Spatial AI for Healthcare
 
 **B**rain **R**easoning **I**ntelligence **D**irected into **G**rounded **E**nvironments
 
 > Don't bring the human into the computer. Bring the computer's intelligence into the human's physical environment.
 
-BRIDGE connects a commodity USB camera, a commodity projector (any OS display) and a vision-language model. It calibrates the camera↔projector relationship automatically, understands what is on a table or wall through AI, and projects spatially registered graphics — circles, arrows, labels, target zones, paths — directly onto the real objects. Ask *"Where is the screwdriver?"* and a circle appears around the physical screwdriver; move it and the circle follows.
+BRIDGE connects a commodity USB camera, a commodity projector (any OS display) and a vision-language model. It calibrates the camera↔projector relationship automatically, understands what is on the bench through AI, and projects spatially registered graphics — reticles, arrows, labels, target zones, paths — directly onto the real items. Say *"Where is the syringe?"* and a glowing reticle lands on the physical syringe; move it and the reticle follows. Say *"Start the order of draw"* and BRIDGE highlights each blood tube in sequence while speaking the step.
+
+It is **voice-first** (microphone → Gemini or offline Whisper → spoken replies) and built for **healthcare workspaces** — phlebotomy trays, medication preparation, instrument counts, dressing kits, PPE, specimen handling — with hard rules: BRIDGE locates items and guides protocol steps; it never diagnoses, prescribes or decides doses. See [docs/healthcare.md](docs/healthcare.md) and [docs/voice.md](docs/voice.md).
+
+The projection canvas is **black**: the projector emits nothing except the graphics, so the room stays dark-friendly and the camera never fights a white wash.
 
 ## What BRIDGE does
 
 ```
-User: "Where is the screwdriver?"
+User: "Where is the syringe?"  (spoken or typed)
         │
         ▼
-   Gemini (WHAT)  ──►  intent=find_object, target=screwdriver, box=[…]
+   Gemini (WHAT)  ──►  intent=find_object, target=syringe, box=[…]
         │
         ▼
    Target resolver ──► local contour/colour matching  (WHERE, now)
@@ -24,7 +28,10 @@ User: "Where is the screwdriver?"
    Homography     ──► camera pixels → projector pixels
         │
         ▼
-   Renderer       ──► pulsing circle on the white canvas → projector → table
+   Renderer       ──► glowing reticle on the black canvas → projector → bench
+        │
+        ▼
+   Voice          ──► "Found syringe."
 ```
 
 * **Hardware agnostic** — any camera OpenCV can open, any display the OS exposes. No vendor code.
@@ -32,7 +39,9 @@ User: "Where is the screwdriver?"
 * **Local-first** — Gemini answers *what*; OpenCV answers *where* at 20–30 FPS.
 * **Measured calibration** — reprojection error is computed on independent validation points and stored; nothing is assumed.
 * **Never project uncertainty as certainty** — low confidence → "Target uncertain. Please clarify."; tracking lost → stale graphics are cleared.
-* **Simulation mode** — a virtual table, virtual objects (draggable), virtual camera and virtual projector run the *same* code paths, so everything can be developed and tested without hardware.
+* **Simulation mode** — a virtual clinic bench (or workshop table), draggable objects, virtual camera and projector run the *same* code paths, so everything can be developed and tested without hardware.
+* **Voice** — hands-free commands and spoken replies; wake word optional; push-to-talk for noisy rooms.
+* **Guided procedures** — spoken checklists with the current item highlighted on the bench; custom procedures as JSON.
 
 ## Architecture
 
@@ -51,7 +60,9 @@ src/bridge/
 ├── interaction/  Controlled command vocabulary (Pydantic), CommandPlanner, TargetResolver,
 │                 CommandExecutor (command → resolve → track → map → render), Task state machine
 ├── render/       ProjectionRenderer (OpenCV rasterizer), primitives, animation, Scene
-├── simulation/   VirtualWorld, SimulatedProjector, SimulatedCamera (with ground-truth homographies)
+├── simulation/   VirtualWorld (clinic / workshop scenes), SimulatedProjector, SimulatedCamera (ground-truth homographies)
+├── voice/        MicrophoneSource + VAD, SpeechToText (Gemini / Whisper / mock), TextToSpeech (pyttsx3), VoiceAssistant
+├── healthcare/   domain prompt context, safety policy, procedure library, ProcedureGuide (voice-driven steps)
 ├── ui/           PySide6 MainWindow, CalibrationWizard, SettingsDialog, widgets
 └── main.py       entry point
 ```
@@ -68,7 +79,7 @@ python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\a
 pip install -e ".[dev]"
 ```
 
-Dependencies: `numpy`, `opencv-contrib-python` (CSRT/KCF trackers), `PySide6`, `pydantic`, `pyyaml`, `google-genai`, `screeninfo`; optional `mediapipe` for hand tracking (`pip install -e ".[hands]"`).
+Dependencies: `numpy`, `opencv-contrib-python` (CSRT/KCF trackers), `PySide6`, `pydantic`, `pyyaml`, `google-genai`, `screeninfo`, `sounddevice` (microphone), `pyttsx3` (speech output); optional `mediapipe` for hand tracking (`pip install -e ".[hands]"`) and `faster-whisper` for offline speech recognition (`pip install -e ".[offline-stt]"`).
 
 > Install **only** `opencv-contrib-python` (not `opencv-python` alongside it). Without the contrib build BRIDGE still works but falls back to the colour/contour tracker.
 
@@ -94,16 +105,17 @@ python -m bridge.main      # same as `bridge`
 ## First run (physical hardware)
 
 1. **Camera** — pick your webcam in the CAMERA box. Status turns green and the live view appears.
-2. **Display / Projector** — the projector is just a second display; BRIDGE pre-selects the secondary one. Press **OPEN PROJECTION**: a borderless white canvas opens fullscreen on that display (Esc closes it). Press **Test graphics** to check you can see a circle, arrow and label on the surface.
+2. **Display / Projector** — the projector is just a second display; BRIDGE pre-selects the secondary one. Press **OPEN PROJECTION**: a borderless black canvas opens fullscreen on that display (Esc closes it). Press **Test graphics** to check you can see a circle, arrow and label on the surface.
 3. **Surface** — Table / Wall / Custom (all planar in V1; the preset is stored in the profile).
 4. **AUTO CALIBRATE** — the wizard projects bright markers one at a time on a dark background, detects them with the camera, fits a homography, then projects an independent 3×3 validation grid and measures the reprojection error. You get `Accuracy: 2.8 px` and **SAVE** writes `profiles/default.json`. Next time the same camera + display is found the profile is loaded automatically.
-5. Type **"Where is the screwdriver?"** and press **EXECUTE**.
+5. Say **"Where is the syringe?"** (LISTEN starts automatically once calibrated) or type it and press **EXECUTE**.
+6. If the reticle sits slightly off the item, enable **Click-to-project test** and nudge with the arrow keys (Shift = 10 px, R = reset). The trim is saved with the profile.
 
 The banner switches to **BRIDGE READY** once a valid calibration is active.
 
 ## Calibration
 
-Planar 4-point (default) or 9-point marker calibration; details, tips and the validation model are in [docs/calibration.md](docs/calibration.md). Key points:
+Planar 9-point (default) or 4-point marker calibration with footprint detection and an independent validation grid measured in camera pixels; details, tips and the validation model are in [docs/calibration.md](docs/calibration.md). Key points:
 
 * Camera and projector must both see the same flat surface and must not move afterwards.
 * Moving either device, changing the camera, display or resolution **invalidates** the calibration (BRIDGE detects device/resolution changes and tells you).
@@ -135,9 +147,9 @@ render: {background: white, target_style: pulse, accent_rgb: [0, 150, 255], line
 
 ```bash
 pip install -e ".[dev]"
-pytest                    # 74 tests: geometry, homography, calibration vs simulator ground truth,
-                          # AI schema validation, command validation, rendering, tracking,
-                          # full simulated demo, device failure handling, GUI smoke tests
+pytest                    # 100 tests: geometry, homography, calibration vs simulator ground truth (incl. 4K projector +
+                          # small dark camera), AI schema validation, command validation, rendering, tracking, voice
+                          # pipeline on synthetic audio, healthcare safety + procedures, full simulated demo, GUI smoke
 bridge --headless-selftest
 ```
 
@@ -156,10 +168,13 @@ See [docs/troubleshooting.md](docs/troubleshooting.md). The most common issues: 
 * Local tracking is appearance based (CSRT/KCF or colour/contour). Fast motion, occlusion by hands, or identical-looking objects can cause a lost or swapped target; BRIDGE then clears the graphic and says *Target lost.*
 * "Any camera / any projector" means any device supported by the OS and OpenCV/Qt, not literally every device.
 * One camera and one projector in V1.
+* Objects have height; a planar homography maps the surface, so tall items seen by an off-axis camera register slightly off their base — use the registration trim for a fixed setup.
+* Voice recognition needs a reasonably quiet room or push-to-talk; the `gemini` provider sends audio clips to Google, `whisper` keeps them local.
+* BRIDGE is not a medical device: it locates and guides, it never diagnoses, prescribes or decides doses.
 
 ## Roadmap
 
-ChArUco / ArUco calibration → Gray-code structured light and dense correspondence → automatic surface detection and non-planar surfaces → better markerless tracking → hand tracking for action verification → guided assembly workflows on the existing task state machine → voice input → multiple cameras/projectors → other AI providers (OpenAI, local VLMs) → installers (Windows first).
+Object-removal verification with hand tracking → per-hospital procedure packs → ChArUco / ArUco calibration → Gray-code structured light and dense correspondence → automatic surface detection and non-planar surfaces → better markerless tracking → hand tracking for action verification → guided assembly workflows on the existing task state machine → voice input → multiple cameras/projectors → other AI providers (OpenAI, local VLMs) → installers (Windows first).
 
 ## License
 

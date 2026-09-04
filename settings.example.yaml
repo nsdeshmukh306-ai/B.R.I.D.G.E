@@ -10,8 +10,8 @@ camera:
 projector:
   preferred_display: null
 calibration:
-  method: planar_4point
-  validation_threshold_px: 10.0
+  method: planar_9point
+  validation_threshold_px: 6.0   # camera pixels
   marker_radius_px: 28
   margin_fraction: 0.12
   detection_min_confidence: 0.6
@@ -27,8 +27,21 @@ ai:
   min_confidence: 0.5
   timeout_s: 30.0
 render:
-  background: white
+  background: black          # projector emits only the graphics
   target_style: pulse
-  accent_rgb: [0, 150, 255]
-  line_width: 4
+  accent_rgb: [0, 220, 200]
+  line_width: 3
   fps: 60
+voice:
+  enabled: true              # start listening when calibration is valid (physical mode)
+  stt_provider: gemini       # gemini | whisper (offline, pip install faster-whisper) | mock
+  tts_enabled: true
+  tts_rate: 175
+  tts_voice: null            # substring of an installed voice name
+  wake_word: bridge
+  require_wake_word: false
+  mic_device: null
+  vad_threshold: 0.012
+  silence_ms: 800
+  max_utterance_s: 12.0
+domain: healthcare

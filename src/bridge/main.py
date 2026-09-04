@@ -42,11 +42,14 @@ def selftest(core) -> int:
     print(res.status_text())
     if not res.success:
         return 2
-    r = core.ask("Where is the screwdriver?")
+    r = core.ask("Where is the syringe?")
     print(f"ask -> ok={r.ok} strategy={r.strategy} targets={r.n_targets} message={r.message}")
+    spoken = core.handle_spoken("start the order of draw")
+    print(f"voice -> {spoken[:80]}...")
+    ok = r.ok and core.guide.active
     core.shutdown()
     log.info("Self-test finished")
-    return 0 if r.ok else 3
+    return 0 if ok else 3
 
 
 def main(argv: list[str] | None = None) -> int:

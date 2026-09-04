@@ -264,7 +264,6 @@ class ProjectionRenderer:
                 p0 = (int(centre[0] + (r + th * 1.5) * math.cos(a)), int(centre[1] + (r + th * 1.5) * math.sin(a)))
                 p1 = (int(centre[0] + (r + th * 1.5 + tick) * math.cos(a)), int(centre[1] + (r + th * 1.5 + tick) * math.sin(a)))
                 cv2.line(img, p0, p1, color, th, cv2.LINE_AA)
-            cv2.circle(img, centre, max(2, int(th * 1.2)), color, -1, cv2.LINE_AA)  # centre dot
 
     def _brackets(self, img, points: list[Point], color, th: int) -> None:
         """Corner brackets around the polygon's bounding box: reads as 'selected' without boxing the object in."""

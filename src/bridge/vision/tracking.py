@@ -11,7 +11,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from bridge.spatial.geometry import BoundingBox, Point
-from bridge.vision.detection import ContourDetector, Detection, color_score
+from bridge.vision.detection import ContourDetector, Detection, color_centroid, color_score
 
 log = logging.getLogger("bridge.tracking")
 
@@ -59,6 +59,9 @@ class ObjectTracker:
         self._label = ""
         self._color: Optional[str] = None
         self._template_area = 0.0
+        self._template_size = (0.0, 0.0)
+        self._anchor_offset: Optional[Point] = None
+        self._anchor_area = 0.0
         self._redetector = ContourDetector()
         self.last_update_ms = 0.0
 
@@ -73,6 +76,11 @@ class ObjectTracker:
             self._color = color_hint
             bbox = detection.bbox.clip(frame.shape[1], frame.shape[0])
             self._template_area = bbox.area
+            self._template_size = (bbox.w, bbox.h)
+            # Anchor: the most distinctive (coloured) part of the object. Re-detection follows the
+            # anchor and reprojects the whole object box through this offset, so a red handle
+            # keeps standing in for the entire screwdriver even when the grey shaft has no contrast.
+            self._anchor_offset = self._find_anchor_offset(frame, bbox, color_hint)
             self._tracker = _make_cv_tracker(self.backend_name)
             backend = self.backend_name
             if self.backend_name == "color":
@@ -91,14 +99,33 @@ class ObjectTracker:
                      bbox.as_xywh_int(), backend)
             return self.state
 
+    def _find_anchor_offset(self, frame: np.ndarray, bbox: BoundingBox, color_hint: str | None) -> Optional[Point]:
+        if not color_hint:
+            return None
+        found = color_centroid(frame, bbox, color_hint)
+        if found is None:
+            return None
+        centre, n = found
+        self._anchor_area = n
+        return bbox.center - centre
+
     def _redetect(self, frame: np.ndarray, near: Point, max_dist: float) -> Optional[BoundingBox]:
         cands = self._redetector.detect(frame)
         best, best_score = None, 0.0
+        anchor_mode = self._color is not None and self._anchor_offset is not None
+        ref_area = self._anchor_area if anchor_mode else self._template_area
+        anchor_near = (near - self._anchor_offset) if anchor_mode else near
         for d in cands:
-            dist = d.center.distance_to(near)
+            centre, area = d.center, d.bbox.area
+            if anchor_mode:
+                found = color_centroid(frame, d.bbox, self._color)  # type: ignore[arg-type]
+                if found is None:
+                    continue
+                centre, area = found  # colour part only: same reference whether or not other parts merged in
+            dist = centre.distance_to(anchor_near)
             if dist > max_dist:
                 continue
-            area_ratio = min(d.bbox.area, self._template_area) / max(d.bbox.area, self._template_area, 1)
+            area_ratio = min(area, ref_area) / max(area, ref_area, 1)
             if area_ratio < 0.3:
                 continue
             score = area_ratio * (1 - dist / max_dist)
@@ -108,8 +135,15 @@ class ObjectTracker:
                     continue  # wrong colour: not our object
                 score *= 0.3 + cs
             if score > best_score:
-                best, best_score = d.bbox, score
-        return best
+                best, best_score = (centre, d), score
+        if best is None:
+            return None
+        centre, d = best
+        if anchor_mode:
+            c = centre + self._anchor_offset
+            w, h = self._template_size
+            return BoundingBox(x=c.x - w / 2, y=c.y - h / 2, w=w, h=h)
+        return d.bbox
 
     def update(self, frame: np.ndarray) -> Optional[TrackingState]:
         t0 = time.perf_counter()

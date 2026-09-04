@@ -143,6 +143,35 @@ def color_score(frame: np.ndarray, bbox: BoundingBox, wanted: str) -> float:
     return float(m.mean())
 
 
+def color_centroid(frame: np.ndarray, bbox: BoundingBox, wanted: str) -> Optional[tuple[Point, float]]:
+    """Centroid and pixel count of colour-matching pixels inside bbox (None if too few)."""
+    x, y, w, h = bbox.as_xywh_int()
+    x, y = max(0, x), max(0, y)
+    roi = frame[y:y + h, x:x + w]
+    if roi.size == 0:
+        return None
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    hh, ss, vv = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    if wanted == "black":
+        m = vv < 60
+    elif wanted == "white":
+        m = (ss < 45) & (vv > 190)
+    elif wanted in ("grey", "gray", "silver"):
+        m = (ss < 45) & (vv >= 60) & (vv <= 190)
+    elif wanted in COLOR_NAMES:
+        m = np.zeros(hh.shape, bool)
+        for lo, hi in COLOR_NAMES[wanted]:
+            m |= (hh >= lo) & (hh < hi)
+        m &= (ss >= 45) & (vv >= 60)
+    else:
+        return None
+    n = int(m.sum())
+    if n < 20:
+        return None
+    ys, xs = np.nonzero(m)
+    return Point(x=x + float(xs.mean()), y=y + float(ys.mean())), float(n)
+
+
 class ColorDetector(ObjectDetector):
     """Detect blobs of a named colour (used to ground descriptions like 'the red object')."""
 

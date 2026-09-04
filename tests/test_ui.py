@@ -58,7 +58,7 @@ def test_calibration_wizard_flow(qapp):
     val = ValidationResult(mean_error_px=2.8, max_error_px=6.1, median_error_px=2.5, n_points=9, threshold_px=10, valid=True)
     wiz = CalibrationWizard(lambda progress: CalibrationResult(success=True, validation=val), lambda: True, "cam", "disp")
     wiz._on_done(CalibrationResult(success=True, validation=val))
-    assert "2.8 px" in wiz.lbl_result.text() and wiz.btn_save.isEnabled()
+    assert "2.8 camera px" in wiz.lbl_result.text() and wiz.btn_save.isEnabled()
     wiz._on_done(CalibrationResult(success=False, message="Calibration failed.\nPossible causes: ..."))
     assert not wiz.btn_save.isEnabled()
 

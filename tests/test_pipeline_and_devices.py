@@ -24,7 +24,7 @@ def core(tmp_path):
     cfg.settings.profiles_dir = tmp_path / "profiles"
     cfg.settings.log_dir = tmp_path / "logs"
     c = BridgeCore(cfg)
-    c.enter_simulation(seed=2)
+    c.enter_simulation(seed=2, scene="workshop")
     c.calibration.method.settle_s = 0.02
     yield c
     c.shutdown()

@@ -14,7 +14,7 @@ log = logging.getLogger("bridge.tasks")
 class TaskStep(BaseModel):
     instruction: str
     target_object: str
-    expected_action: Literal["pick_up", "place", "connect", "remove", "observe"] = "pick_up"
+    expected_action: Literal["pick_up", "place", "connect", "remove", "observe", "verify"] = "pick_up"
     projection_action: Literal["highlight_object", "point_to_object", "show_target_zone", "draw_path"] = "highlight_object"
     verification_method: Literal["none", "object_removed", "object_present", "manual"] = "none"
 

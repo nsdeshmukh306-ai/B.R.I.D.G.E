@@ -103,7 +103,8 @@ class SimulationOracleProvider(AIProvider):
         super().__init__()
         self.world, self.camera = world, camera
         self.latency_s = latency_s
-        self.pickup_order = pickup_order or ["screwdriver", "screw", "pen", "scissors", "phone"]
+        self.pickup_order = pickup_order or ["gloves", "tourniquet", "alcohol swab", "needle", "syringe", "lavender cap tube",
+                                             "gauze", "screwdriver", "screw", "pen", "scissors", "phone"]
         self.status.provider = "Simulation oracle (mock)"
 
     def _box(self, obj) -> NormalizedBox:

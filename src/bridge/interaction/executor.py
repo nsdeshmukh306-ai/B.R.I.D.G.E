@@ -125,6 +125,7 @@ class CommandExecutor:
                 return ExecutionResult(False, f"Target '{spec.label}' not found", res.strategy)
             self._start_tracking(cmd, res, frame)
             states = self.active.tracker.update(frame) if self.active else []
+            self.last_states = states
             self._render_states(states)
             pts = [self.mapper.camera_to_projector(s.center) for s in states] if self.mapper else []
             for s in states:

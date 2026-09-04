@@ -88,7 +88,13 @@ class CommandPlanner:
     def __init__(self, min_confidence: float = 0.5):
         self.min_confidence = min_confidence
 
-    def plan(self, ident: TargetIdentification, frame_w: int, frame_h: int) -> Command:  # type: ignore[valid-type]
+    def plan(self, ident: TargetIdentification, frame_w: int, frame_h: int, label_override: str | None = None) -> Command:  # type: ignore[valid-type]
+        cmd = self._plan(ident, frame_w, frame_h)
+        if label_override and hasattr(cmd, "label_text"):
+            cmd.label_text = label_override
+        return cmd
+
+    def _plan(self, ident: TargetIdentification, frame_w: int, frame_h: int) -> Command:  # type: ignore[valid-type]
         if ident.intent == "clear_projection":
             return ClearProjection()
         if ident.intent in ("show_message", "describe_scene", "unknown"):
@@ -112,5 +118,7 @@ class CommandPlanner:
             dest = TargetSpec(label=ident.secondary_target, boxes_camera=[b.to_pixels(frame_w, frame_h) for b in ident.secondary_boxes])
             return DrawPath(source=spec, destination=dest)
         if ident.intent == "next_step":
+            if not ident.target and not ident.boxes:
+                return ShowMessage(text=ident.message or "Nothing to do next.")
             return HighlightObject(target=spec, style=CommandStyle(shape="circle", animation="pulse"), label_text=ident.message or ident.target)
-        return HighlightObject(target=spec, style=style, label_text=ident.target if ident.intent == "find_object" else "")
+        return HighlightObject(target=spec, style=style, label_text=ident.target if ident.intent in ("find_object", "highlight_object", "find_all") else "")

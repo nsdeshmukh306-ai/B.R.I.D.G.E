@@ -30,6 +30,8 @@ class Topic(str, Enum):
     COMMAND_EXECUTED = "command.executed"
     STATUS_MESSAGE = "status.message"
     SCENE_UPDATED = "scene.updated"
+    VOICE_EVENT = "voice.event"
+    PROCEDURE_STEP = "procedure.step"
 
 
 @dataclass

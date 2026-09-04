@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def sim():
     from bridge.simulation.world import make_default_simulation
 
-    return make_default_simulation(seed=1)
+    return make_default_simulation(seed=1, scene="workshop")
 
 
 @pytest.fixture

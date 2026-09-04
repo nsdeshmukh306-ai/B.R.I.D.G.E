@@ -49,6 +49,20 @@ class AISettings(BaseModel):
     timeout_s: float = 30.0
 
 
+class VoiceSettings(BaseModel):
+    enabled: bool = True                 # start listening automatically when the app is READY
+    stt_provider: Literal["gemini", "whisper", "mock"] = "gemini"
+    tts_enabled: bool = True
+    tts_rate: int = 175
+    tts_voice: Optional[str] = None      # substring of an installed voice name, e.g. "Zira"
+    wake_word: str = "bridge"
+    require_wake_word: bool = False
+    mic_device: Optional[int] = None
+    vad_threshold: float = 0.012
+    silence_ms: int = 800
+    max_utterance_s: float = 12.0
+
+
 class RenderSettings(BaseModel):
     background: Literal["white", "black", "transparent", "custom"] = "black"  # black = projector emits only the graphics
     custom_background_rgb: tuple[int, int, int] = (0, 0, 0)
@@ -69,6 +83,8 @@ class AppSettings(BaseModel):
     tracking: TrackingSettings = Field(default_factory=TrackingSettings)
     ai: AISettings = Field(default_factory=AISettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
+    voice: VoiceSettings = Field(default_factory=VoiceSettings)
+    domain: Literal["healthcare", "general"] = "healthcare"
 
 
 class Secrets(BaseModel):

@@ -21,7 +21,7 @@ from bridge.app.events import EventBus, Topic
 from bridge.app.state import CalibrationStatus, StateManager
 from bridge.camera.device import CameraInfo
 from bridge.camera.manager import CameraManager
-from bridge.interaction.commands import Command, CommandPlanner
+from bridge.interaction.commands import ClearProjection, Command, CommandPlanner, ShowMessage
 from bridge.interaction.executor import CommandExecutor, ExecutionResult
 from bridge.interaction.resolver import TargetResolver
 from bridge.projector.manager import DisplayDevice, DisplayManager
@@ -29,6 +29,11 @@ from bridge.render.renderer import ProjectionRenderer
 from bridge.spatial.calibration import CalibrationEngine, CalibrationResult, ProjectorLink, build_method
 from bridge.spatial.homography import CoordinateMapper
 from bridge.spatial.profile import ProfileStore
+from bridge.healthcare.guide import ProcedureGuide
+from bridge.healthcare.procedures import ProcedureLibrary
+from bridge.healthcare.prompts import HEALTHCARE_CONTEXT
+from bridge.healthcare.safety import cautions_for_target, check_request
+from bridge.ai.prompts import PromptBuilder
 
 log = logging.getLogger("bridge.core")
 
@@ -83,6 +88,13 @@ class BridgeCore:
         self._frame_unsub = self.cameras.add_frame_listener(self._on_frame)
         self._frame_count = 0
         self.bus.subscribe(Topic.CAMERA_CONNECTED, self._on_camera_connected)
+        PromptBuilder.extra_context = HEALTHCARE_CONTEXT if self.settings.domain == "healthcare" else ""
+        self.procedures = ProcedureLibrary()
+        self.guide = ProcedureGuide(self, self.procedures, speak=self.speak)
+        self.guide.on_step = lambda step, i, n: self.bus.publish(Topic.PROCEDURE_STEP, step=step, index=i, total=n)
+        self.voice = None  # VoiceAssistant, created by start_voice()
+        self._tts = None
+        self.last_spoken_reply = ""
 
     # ---- hardware -------------------------------------------------------------------------
     def refresh_devices(self) -> tuple[list[CameraInfo], list[DisplayDevice]]:
@@ -127,11 +139,11 @@ class BridgeCore:
         self.state.diagnostics.camera_resolution = f"{ev.payload.get('width')}x{ev.payload.get('height')}"
 
     # ---- simulation ----------------------------------------------------------------------
-    def enter_simulation(self, seed: int = 0) -> None:
+    def enter_simulation(self, seed: int = 0, scene: str = "clinic") -> None:
         from bridge.simulation.world import make_default_simulation
 
         self.state.mode = "simulation"
-        world, projector, camera = make_default_simulation(seed)
+        world, projector, camera = make_default_simulation(seed, scene=scene)
         self.simulation = (world, projector, camera)
         self.cameras.use_source(camera, "sim:camera")
         self.state.diagnostics.camera_name = "Simulated camera"
@@ -181,11 +193,18 @@ class BridgeCore:
         self.state.diagnostics.ai_last_request_ts = st.last_request_ts
         self.state.diagnostics.ai_last_latency_s = st.last_latency_s
 
-    def ask(self, query: str) -> ExecutionResult:
+    def ask(self, query: str, label_override: str | None = None) -> ExecutionResult:
         """Natural-language entry point. Blocking (call from a worker thread in the UI)."""
         query = query.strip()
         if not query:
             return ExecutionResult(False, "Empty command")
+        if self.settings.domain == "healthcare":
+            verdict = check_request(query)
+            if not verdict.allowed:
+                log.warning("Request declined by safety policy: %r", query)
+                self.executor.execute(ShowMessage(text="Not a decision I can make.\nCheck the protocol or prescriber.", duration_s=6),
+                                      self.cameras.latest_frame() if self.cameras.latest_frame() is not None else np.zeros((2, 2, 3), np.uint8))
+                return ExecutionResult(False, verdict.reason, "declined")
         if self.ai is None:
             ok, msg = self.set_ai_provider()
             if not ok:
@@ -210,7 +229,7 @@ class BridgeCore:
         log.info("AI command: %s target=%s confidence=%.2f boxes=%d", ident.intent, ident.target, ident.confidence, len(ident.boxes))
         self.bus.publish(Topic.AI_RESPONSE, identification=ident)
         h, w = frame.shape[:2]
-        cmd = self.planner.plan(ident, w, h)
+        cmd = self.planner.plan(ident, w, h, label_override=label_override)
         return self.execute(cmd, frame)
 
     def execute(self, cmd: Command, frame: np.ndarray | None = None) -> ExecutionResult:  # type: ignore[valid-type]
@@ -243,6 +262,100 @@ class BridgeCore:
                                      confidence=plan.confidence, boxes=plan.boxes, message=plan.instruction)
         h, w = frame.shape[:2]
         return self.execute(self.planner.plan(ident, w, h), frame)
+
+    # ---- spoken interaction --------------------------------------------------------------------
+    def spoken_reply(self, result: ExecutionResult) -> str:
+        """Turn an execution result into one short sentence for the voice channel."""
+        ident = self.last_identification
+        target = (ident.target if ident and ident.target else "the target")
+        if result.strategy == "declined":
+            return result.message
+        if not result.ok:
+            if "calibration" in result.message.lower():
+                return "Spatial calibration is required first."
+            if "not found" in result.message.lower():
+                return f"I could not find {target} on the surface. Please clarify."
+            if "AI" in result.message:
+                return "The AI service did not respond. Please try again."
+            return result.message.replace("\n", " ")
+        if result.strategy == "clear":
+            return "Cleared."
+        if result.strategy == "message":
+            return result.message.replace("\n", " ")
+        cautions = " ".join(cautions_for_target(target, ident.visual_description if ident else "")) if self.settings.domain == "healthcare" else ""
+        if result.strategy == "path":
+            base = result.message.replace("->", "to")
+        elif result.n_targets > 1:
+            base = f"{result.n_targets} {target}s highlighted."
+        else:
+            verb = {"point_to_object": "Pointing to", "label_object": "Labelled", "show_target_zone": "Showing the zone for"}.get(
+                result.message.split(":")[0], "Found")
+            base = f"{verb} {target}."
+        return f"{base} {cautions}".strip()
+
+    def handle_spoken(self, text: str) -> str:
+        """Route a spoken command: procedure control words first, then the normal pipeline."""
+        from bridge.voice.assistant import strip_wake_word
+
+        text = text.strip()
+        if not text:
+            return ""
+        text = strip_wake_word(text, self.settings.voice.wake_word) or text
+        reply = self.guide.handle_control_word(text)
+        if reply is None:
+            t = text.lower().rstrip("?.! ")
+            if t in ("clear", "clear the projection", "clear projection"):
+                reply = self.spoken_reply(self.execute(ClearProjection()))
+            elif t in ("what next", "what's next", "what should i do next", "what should i pick up first", "next step", "what do i do next"):
+                reply = self.guide.next() if self.guide.active else self.spoken_reply(self.next_step())
+            elif t in ("calibrate", "run calibration", "start calibration"):
+                reply = "Please press Auto Calibrate on the control panel; I cannot calibrate hands-free yet."
+            elif t in ("list procedures", "what procedures do you have", "which procedures"):
+                reply = "Available procedures: " + ", ".join(n for _, n in self.procedures.names()) + "."
+            else:
+                reply = self.spoken_reply(self.ask(text))
+        self.last_spoken_reply = reply
+        return reply
+
+    def speak(self, text: str) -> None:
+        if self._tts is not None and text:
+            self._tts.speak(text)
+
+    def start_voice(self, stt_kind: str | None = None) -> tuple[bool, str]:
+        """Start hands-free listening. Returns (ok, message)."""
+        from bridge.voice.assistant import VoiceAssistant
+        from bridge.voice.audio import MicrophoneSource, UtteranceCapture
+        from bridge.voice.stt import build_stt
+        from bridge.voice.tts import build_tts
+
+        v = self.settings.voice
+        if self.voice is not None and self.voice.running:
+            return True, "already listening"
+        kind = stt_kind or v.stt_provider
+        if self.simulation is not None and kind == "gemini" and not self.config.secrets.gemini_api_key:
+            kind = "mock"
+        try:
+            stt = build_stt(kind, self.config.secrets.gemini_api_key, self.settings.ai.model)
+        except (AIError, ValueError) as e:
+            return False, f"Speech recognition unavailable: {e}"
+        if self._tts is None:
+            self._tts = build_tts(v.tts_enabled, v.tts_rate, v.tts_voice)
+        capture = UtteranceCapture(threshold=v.vad_threshold, silence_ms=v.silence_ms, max_utterance_s=v.max_utterance_s)
+        self.voice = VoiceAssistant(lambda: MicrophoneSource(v.mic_device), stt, self._tts, self.handle_spoken,
+                                    wake_word=v.wake_word, require_wake_word=v.require_wake_word,
+                                    on_event=lambda e: self.bus.publish(Topic.VOICE_EVENT, event=e), capture=capture)
+        try:
+            self.voice.start()
+        except RuntimeError as e:
+            self.voice = None
+            return False, str(e)
+        log.info("Voice assistant listening (stt=%s, wake word=%s, required=%s)", stt.name, v.wake_word, v.require_wake_word)
+        return True, "listening"
+
+    def stop_voice(self) -> None:
+        if self.voice is not None:
+            self.voice.stop()
+            self.voice = None
 
     # ---- calibration ------------------------------------------------------------------------
     def can_calibrate(self) -> tuple[bool, str]:
@@ -371,6 +484,9 @@ class BridgeCore:
             d.tracking_confidence = None
 
     def shutdown(self) -> None:
+        self.stop_voice()
+        if self._tts is not None:
+            self._tts.close()
         self.cameras.close()
         if self.ai:
             self.ai.close()

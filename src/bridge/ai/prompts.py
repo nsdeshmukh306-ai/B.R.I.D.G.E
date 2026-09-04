@@ -15,13 +15,19 @@ SYSTEM_CONTEXT = (
 
 
 class PromptBuilder:
-    @staticmethod
-    def identify_target(user_query: str, width: int, height: int, known_labels: list[str] | None = None) -> str:
+    extra_context: str = ""  # domain knowledge (e.g. healthcare) appended to the system context
+
+    @classmethod
+    def _context(cls) -> str:
+        return SYSTEM_CONTEXT + (f"\n\n{cls.extra_context}" if cls.extra_context else "")
+
+    @classmethod
+    def identify_target(cls, user_query: str, width: int, height: int, known_labels: list[str] | None = None) -> str:
         known = ""
         if known_labels:
             known = f"\nObjects currently tracked locally: {', '.join(known_labels)}."
         return (
-            f"{SYSTEM_CONTEXT}\n\n"
+            f"{cls._context()}\n\n"
             f"User request: \"{user_query}\"\n"
             f"The image is {width}x{height} pixels.{known}\n\n"
             "Return JSON with fields:\n"
@@ -38,18 +44,18 @@ class PromptBuilder:
             "and explain in message."
         )
 
-    @staticmethod
-    def understand_scene(width: int, height: int) -> str:
+    @classmethod
+    def understand_scene(cls, width: int, height: int) -> str:
         return (
-            f"{SYSTEM_CONTEXT}\n\nList every distinct physical object on the surface in this {width}x{height} image. "
+            f"{cls._context()}\n\nList every distinct physical object on the surface in this {width}x{height} image. "
             "Return JSON {objects:[{label, visual_description, box:{box_2d:[ymin,xmin,ymax,xmax], label}, confidence}], "
             "summary}. box_2d uses a 0-1000 scale."
         )
 
-    @staticmethod
-    def plan_action(task_context: str, width: int, height: int) -> str:
+    @classmethod
+    def plan_action(cls, task_context: str, width: int, height: int) -> str:
         return (
-            f"{SYSTEM_CONTEXT}\n\nTask context: {task_context}\n"
+            f"{cls._context()}\n\nTask context: {task_context}\n"
             f"Looking at this {width}x{height} image, decide the single next physical action for the user.\n"
             "Return JSON {instruction, target, visual_description, boxes:[{box_2d:[ymin,xmin,ymax,xmax], label}], "
             "confidence, done}. done=true if the task is complete."

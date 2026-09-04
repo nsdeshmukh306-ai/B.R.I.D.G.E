@@ -20,7 +20,7 @@ from bridge.camera.device import FrameSource
 from bridge.spatial.geometry import BoundingBox, Point
 from bridge.spatial.homography import apply_homography
 
-Shape = Literal["rect", "ellipse", "screwdriver", "screw", "pen", "scissors", "phone"]
+Shape = Literal["rect", "ellipse", "screwdriver", "screw", "pen", "scissors", "phone", "tube", "syringe", "box"]
 
 
 @dataclass
@@ -54,6 +54,26 @@ def default_objects() -> list[VirtualObject]:
         VirtualObject("obj-screw-1", "screw", 220, 480, 22, 22, (90, 90, 90), "screw", 0, "a small grey screw"),
         VirtualObject("obj-screw-2", "screw", 265, 500, 22, 22, (90, 90, 90), "screw", 0, "a small grey screw"),
         VirtualObject("obj-pen", "pen", 500, 520, 170, 18, (200, 120, 20), "pen", 5, "a blue pen"),
+    ]
+
+
+def clinic_objects() -> list[VirtualObject]:
+    """A clinical bench: tubes by cap colour, syringe, swab, gauze, gloves, scalpel, forceps, sharps bin."""
+    return [
+        VirtualObject("obj-lavender", "lavender cap tube", 200, 150, 26, 110, (200, 120, 200), "tube", 0, "lavender purple cap blood tube"),
+        VirtualObject("obj-lightblue", "light blue cap tube", 250, 150, 26, 110, (230, 190, 120), "tube", 0, "light blue cap blood tube"),
+        VirtualObject("obj-red", "red cap tube", 300, 150, 26, 110, (40, 40, 220), "tube", 0, "red cap blood tube"),
+        VirtualObject("obj-green", "green cap tube", 350, 150, 26, 110, (60, 180, 60), "tube", 0, "green cap blood tube"),
+        VirtualObject("obj-grey", "grey cap tube", 400, 150, 26, 110, (140, 140, 140), "tube", 0, "grey cap blood tube"),
+        VirtualObject("obj-syringe", "syringe", 620, 140, 200, 30, (240, 240, 240), "syringe", 8, "clear 10 mL syringe with white plunger"),
+        VirtualObject("obj-needle", "needle", 640, 200, 90, 14, (230, 200, 90), "rect", 5, "needle in light blue packaging"),
+        VirtualObject("obj-swab", "alcohol swab", 560, 300, 60, 45, (250, 250, 250), "rect", 0, "small white swab packet"),
+        VirtualObject("obj-gauze", "gauze", 700, 330, 110, 110, (245, 245, 245), "rect", 0, "white gauze pack"),
+        VirtualObject("obj-gloves", "gloves", 200, 420, 180, 120, (220, 200, 150), "rect", -8, "pair of light blue examination gloves"),
+        VirtualObject("obj-scalpel", "scalpel", 470, 470, 150, 16, (190, 190, 200), "rect", 0, "scalpel with metal blade"),
+        VirtualObject("obj-forceps", "forceps", 480, 520, 160, 22, (185, 185, 190), "scissors", 0, "metal forceps"),
+        VirtualObject("obj-sharps", "sharps container", 880, 470, 120, 150, (30, 200, 240), "box", 0, "yellow sharps container"),
+        VirtualObject("obj-tourniquet", "tourniquet", 850, 200, 120, 40, (60, 60, 200), "rect", 15, "blue elastic tourniquet"),
     ]
 
 
@@ -130,6 +150,25 @@ class VirtualWorld:
             for dy in (-0.25, 0.25):
                 cv2.ellipse(img, (int(o.x - o.w * 0.3), int(o.y + o.h * dy)), (int(o.w * 0.18), int(o.h * 0.22)),
                             o.angle_deg, 0, 360, c, 4, cv2.LINE_AA)
+        elif o.shape == "tube":
+            body = self._rot_rect(o.x, o.y + o.h * 0.12, o.w, o.h * 0.76, o.angle_deg)
+            cv2.fillPoly(img, [body], (225, 215, 200), cv2.LINE_AA)  # translucent plastic look
+            cap = self._rot_rect(o.x, o.y - o.h * 0.38, o.w * 1.15, o.h * 0.24, o.angle_deg)
+            cv2.fillPoly(img, [cap], c, cv2.LINE_AA)
+            cv2.polylines(img, [body], True, dark, 1, cv2.LINE_AA)
+        elif o.shape == "syringe":
+            barrel = self._rot_rect(o.x - o.w * 0.1, o.y, o.w * 0.7, o.h, o.angle_deg)
+            plunger = self._rot_rect(o.x + o.w * 0.35, o.y, o.w * 0.3, o.h * 0.5, o.angle_deg)
+            tip = self._rot_rect(o.x - o.w * 0.5, o.y, o.w * 0.12, o.h * 0.35, o.angle_deg)
+            cv2.fillPoly(img, [barrel], c, cv2.LINE_AA)
+            cv2.polylines(img, [barrel], True, (150, 150, 150), 1, cv2.LINE_AA)
+            cv2.fillPoly(img, [plunger], (200, 200, 200), cv2.LINE_AA)
+            cv2.fillPoly(img, [tip], (200, 200, 200), cv2.LINE_AA)
+        elif o.shape == "box":
+            r = self._rot_rect(o.x, o.y, o.w, o.h, o.angle_deg)
+            cv2.fillPoly(img, [r], c, cv2.LINE_AA)
+            lid = self._rot_rect(o.x, o.y - o.h * 0.42, o.w * 1.05, o.h * 0.16, o.angle_deg)
+            cv2.fillPoly(img, [lid], dark, cv2.LINE_AA)
         elif o.shape == "phone":
             r = self._rot_rect(o.x, o.y, o.w, o.h, o.angle_deg)
             cv2.fillPoly(img, [r], c, cv2.LINE_AA)
@@ -275,8 +314,9 @@ class SimulatedCamera(FrameSource):
         return self.render()
 
 
-def make_default_simulation(seed: int = 0) -> tuple[VirtualWorld, SimulatedProjector, SimulatedCamera]:
-    world = VirtualWorld()
+def make_default_simulation(seed: int = 0, scene: str = "clinic") -> tuple[VirtualWorld, SimulatedProjector, SimulatedCamera]:
+    """scene: 'clinic' (blood tubes, syringe, gauze, sharps bin...) or 'workshop' (screwdriver, screws...)."""
+    world = VirtualWorld(objects=clinic_objects() if scene == "clinic" else default_objects())
     projector = SimulatedProjector(world=world)
     camera = SimulatedCamera(world, projector, seed=seed)
     return world, projector, camera

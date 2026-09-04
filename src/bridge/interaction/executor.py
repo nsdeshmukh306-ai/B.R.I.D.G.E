@@ -18,7 +18,7 @@ from bridge.interaction.commands import (
     ClearProjection, Command, DrawPath, HighlightObject, LabelObject, PointToObject, ShowMessage, ShowTargetZone, TargetSpec,
 )
 from bridge.interaction.resolver import Resolution, TargetResolver
-from bridge.render.primitives import Style
+from bridge.render.primitives import SUCCESS, TEXT, Style
 from bridge.render.renderer import ProjectionRenderer
 from bridge.spatial.geometry import BoundingBox, Point
 from bridge.spatial.homography import CoordinateMapper
@@ -88,11 +88,14 @@ class CommandExecutor:
         return suppress(frame, cached)
 
     # -- calibration -----------------------------------------------------------------------
-    def set_mapper(self, mapper: Optional[CoordinateMapper]) -> None:
+    def set_mapper(self, mapper: Optional[CoordinateMapper], keep_scene: bool = False) -> None:
         with self._lock:
             self.mapper = mapper
+            self._mask_cache = (-1, None)
             if mapper is None:
                 self.clear()
+            elif keep_scene and self.active is not None:
+                self._render_states([s for s in self.last_states if not s.is_lost])
 
     @property
     def calibrated(self) -> bool:
@@ -229,8 +232,8 @@ class CommandExecutor:
                                 Style(color=st.color), GROUP_TARGET)
         elif a.kind == "zone":
             poly = m.camera_bbox_to_projector_polygon(self._inflate(s.bbox, 1.3)).points
-            self.renderer.target_zone(poly, Style(color=(40, 200, 90), thickness=self.line_width, dashed=True, animation="flow"), GROUP_ZONE)
-            self.renderer.label(Point(x=center.x - radius * 0.5, y=center.y), a.label_text or "Place here", Style(color=(40, 200, 90)), GROUP_ZONE)
+            self.renderer.target_zone(poly, Style(color=SUCCESS, thickness=self.line_width, dashed=True, animation="flow"), GROUP_ZONE)
+            self.renderer.label(Point(x=center.x - radius * 0.5, y=center.y), a.label_text or "Place here", Style(color=SUCCESS), GROUP_ZONE)
 
     @staticmethod
     def _inflate(b: BoundingBox, k: float) -> BoundingBox:
@@ -254,12 +257,12 @@ class CommandExecutor:
         self.renderer.path([a, mid, b], Style(color=self.accent, thickness=self.line_width, animation="flow"), GROUP_TARGET)
         self.renderer.circle(a, 30, Style(color=self.accent, thickness=self.line_width), GROUP_TARGET)
         zone = self.mapper.camera_bbox_to_projector_polygon(self._inflate(dst.detections[0].bbox, 1.3)).points
-        self.renderer.target_zone(zone, Style(color=(40, 200, 90), thickness=self.line_width, dashed=True), GROUP_ZONE)
+        self.renderer.target_zone(zone, Style(color=SUCCESS, thickness=self.line_width, dashed=True), GROUP_ZONE)
         log.info("Projection action: draw_path %s -> %s", cmd.source.label, cmd.destination.label)
         return ExecutionResult(True, f"Path {cmd.source.label} -> {cmd.destination.label}", "path", 2, [a, b])
 
     def _show_message(self, text: str, duration_s: float) -> None:
         self.renderer.scene.remove_group(GROUP_MESSAGE)
-        self.renderer.message(text, style=Style(color=(30, 30, 30)), group=GROUP_MESSAGE)
+        self.renderer.message(text, style=Style(color=TEXT if self.renderer.dark else (30, 30, 30), glow=False), group=GROUP_MESSAGE)
         self._message_expiry = time.time() + duration_s if duration_s > 0 else None
         self.on_status(text.replace("\n", " "))

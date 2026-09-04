@@ -32,6 +32,7 @@ class CalibrationProfile(BaseModel):
     workspace_projector: list[Point] = Field(default_factory=list)
     validation: ValidationResult
     mode: str = "physical"
+    trim_px: tuple[float, float] = (0.0, 0.0)  # user registration nudge in projector px
 
     @property
     def validation_error(self) -> float:

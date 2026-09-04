@@ -142,7 +142,7 @@ class BridgeCore:
                              x=0, y=0, is_primary=False)
         self.select_display(disp)
         self.attach_projector(projector)
-        self.renderer.background = "white" if self.settings.render.background == "transparent" else self.settings.render.background
+        self.renderer.background = self.settings.render.background
         self.set_ai_provider("mock")
         self.invalidate_calibration("Entered simulation mode")
         log.info("Simulation mode started")
@@ -293,11 +293,35 @@ class BridgeCore:
         if prof is None:
             self.state.set_calibration(CalibrationStatus.NOT_CALIBRATED)
             return False
-        self.executor.set_mapper(CoordinateMapper(prof.homography))
+        self.executor.set_mapper(CoordinateMapper(prof.homography, prof.trim_px))
         self.state.surface_type = prof.surface_type
         self.state.set_calibration(CalibrationStatus.VALID, prof.validation.mean_error_px)
         self.bus.publish(Topic.CALIBRATION_COMPLETE, result=self.calibration.result, loaded=True)
         return True
+
+    @property
+    def registration_trim(self) -> tuple[float, float]:
+        m = self.executor.mapper
+        return m.trim if m is not None else (0.0, 0.0)
+
+    def nudge_registration(self, dx: float, dy: float) -> tuple[float, float]:
+        """Shift all projected graphics by (dx, dy) projector px; persisted with the profile."""
+        m = self.executor.mapper
+        if m is None:
+            return (0.0, 0.0)
+        new = (m.trim[0] + dx, m.trim[1] + dy)
+        self.executor.set_mapper(m.with_trim(*new), keep_scene=True)
+        prof = self.calibration.profile
+        if prof is not None:
+            prof.trim_px = new
+            self.store.save(prof)
+        log.info("Registration trim set to dx=%.0f dy=%.0f px", *new)
+        return new
+
+    def reset_registration_trim(self) -> None:
+        m = self.executor.mapper
+        if m is not None:
+            self.nudge_registration(-m.trim[0], -m.trim[1])
 
     def invalidate_calibration(self, reason: str) -> None:
         self.calibration.invalidate(reason)

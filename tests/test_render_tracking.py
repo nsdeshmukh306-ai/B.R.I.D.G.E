@@ -8,7 +8,7 @@ from bridge.vision.tracking import ObjectTracker, MultiTracker
 
 
 def test_all_primitives_render_without_exceptions():
-    r = ProjectionRenderer(640, 360)
+    r = ProjectionRenderer(640, 360, "white")
     r.circle(Point(x=300, y=180), 60, Style(animation="pulse"))
     r.circle(Point(x=100, y=100), 30, Style(dashed=True))
     r.outline([Point(x=10, y=10), Point(x=100, y=10), Point(x=100, y=80)])
@@ -30,14 +30,39 @@ def test_all_primitives_render_without_exceptions():
 
 def test_background_modes():
     assert np.all(ProjectionRenderer(8, 8, "black").render() == 0)
+    assert np.all(ProjectionRenderer(8, 8).render() == 0)  # black is the default canvas
+    assert np.all(ProjectionRenderer(8, 8, "white").render() == 255)
     assert np.all(ProjectionRenderer(8, 8, "custom", (10, 20, 30)).render()[0, 0] == [30, 20, 10])
 
 
 def test_render_mask_covers_only_graphics():
     r = ProjectionRenderer(200, 200)
-    r.circle(Point(x=100, y=100), 40, Style(thickness=4))
+    r.circle(Point(x=100, y=100), 40, Style(thickness=4, variant="ring", glow=False))
     m = r.render_mask()
     assert m[100, 60] == 255 and m[100, 100] == 0 and m[5, 5] == 0
+
+
+def test_glow_and_reticle_render_on_black_and_stay_within_extent():
+    r = ProjectionRenderer(400, 300)
+    r.circle(Point(x=200, y=150), 50, Style(animation="pulse"))
+    img = r.render(0.2)
+    assert img[150, 145].max() > 150          # ring itself (pulse scales the radius slightly)
+    assert 0 < img[150, 140].max() < 200      # soft glow just outside the ring
+    assert img[10, 10].max() == 0             # far away stays black (projector emits nothing)
+    r.background = "white"
+    img_w = r.render(0.2)
+    assert img_w[10, 10].min() == 255
+
+
+def test_rounded_rect_and_label_pill():
+    from bridge.render.renderer import rounded_rect_points
+
+    pts = rounded_rect_points(10, 10, 100, 40, 12)
+    assert pts.shape[1] == 2 and len(pts) == 28
+    r = ProjectionRenderer(300, 100)
+    r.label(Point(x=20, y=50), "syringe 5 mL")
+    img = r.render()
+    assert img[46:52, 30:60].max() > 100  # pill background is drawn around the text
 
 
 def test_scene_groups():

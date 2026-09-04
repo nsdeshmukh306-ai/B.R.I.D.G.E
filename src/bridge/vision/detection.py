@@ -47,8 +47,9 @@ class ContourDetector(ObjectDetector):
 
     name = "contour"
 
-    def __init__(self, min_area: float = 250.0, max_area_fraction: float = 0.35, blur: int = 5):
+    def __init__(self, min_area: float = 250.0, max_area_fraction: float = 0.35, blur: int = 5, reject_shadows: bool = False):
         self.min_area, self.max_area_fraction, self.blur = min_area, max_area_fraction, blur
+        self.reject_shadows = reject_shadows
 
     def foreground_mask(self, frame: np.ndarray) -> np.ndarray:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -63,6 +64,14 @@ class ContourDetector(ObjectDetector):
         _, m1 = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
         _, m2 = cv2.threshold(sat, 70, 255, cv2.THRESH_BINARY)
         mask = cv2.bitwise_or(m1, m2)
+        if self.reject_shadows:
+            # A projector at an angle casts a hard shadow beside every object. Shadows are
+            # moderately darker than the surface and colourless; genuinely dark objects are
+            # much darker. Remove the shadow band so it cannot pull an object's centre.
+            ratio = gray.astype(np.float32) / np.maximum(bg.astype(np.float32), 1.0)
+            shadow = ((ratio > 0.35) & (ratio < 0.85) & (sat < 45)).astype(np.uint8) * 255
+            shadow = cv2.morphologyEx(shadow, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(shadow))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         return mask

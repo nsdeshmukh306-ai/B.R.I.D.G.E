@@ -66,9 +66,15 @@ class TargetResolver:
                     iou = d.bbox.iou(b)
                     if iou > best_iou:
                         best, best_iou = d, iou
-                if best is not None and best_iou >= self.snap_iou and best.bbox.area <= b.area * 1.5:
+                # Snap only when the contour agrees with the AI box: good overlap, not much
+                # bigger (a shadow or neighbour merged in) and its centre has not drifted far.
+                drift_ok = best is not None and best.center.distance_to(b.center) <= 0.2 * b.radius
+                if best is not None and best_iou >= self.snap_iou and best.bbox.area <= b.area * 1.3 and drift_ok:
                     dets.append(best.model_copy(update={"label": spec.label or best.label, "source": "ai+local", "confidence": 0.9}))
                 else:
+                    if best is not None and best_iou >= self.snap_iou:
+                        log.info("AI box kept: local contour drifted %.0fpx / area x%.1f (shadow or merge?)",
+                                 best.center.distance_to(b.center), best.bbox.area / max(b.area, 1))
                     dets.append(Detection.from_bbox(spec.label or "object", b, 0.75, "ai"))
             log.info("Target resolved via AI boxes n=%d", len(dets))
             return Resolution(dets if spec.all_instances else dets[:1], "ai_boxes", hint)

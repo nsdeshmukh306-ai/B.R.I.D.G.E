@@ -27,7 +27,7 @@ class ProjectorSettings(BaseModel):
 
 
 class CalibrationSettings(BaseModel):
-    method: str = "planar_4point"
+    method: str = "planar_9point"  # 3x3 markers + RANSAC; more accurate than 4 corners
     validation_threshold_px: float = 6.0  # camera pixels, measured on independent points
     marker_radius_px: int = 28
     margin_fraction: float = 0.12
@@ -50,11 +50,11 @@ class AISettings(BaseModel):
 
 
 class RenderSettings(BaseModel):
-    background: Literal["white", "black", "transparent", "custom"] = "white"
-    custom_background_rgb: tuple[int, int, int] = (255, 255, 255)
+    background: Literal["white", "black", "transparent", "custom"] = "black"  # black = projector emits only the graphics
+    custom_background_rgb: tuple[int, int, int] = (0, 0, 0)
     target_style: Literal["pulse", "static"] = "pulse"
-    accent_rgb: tuple[int, int, int] = (0, 150, 255)
-    line_width: int = 4
+    accent_rgb: tuple[int, int, int] = (0, 220, 200)
+    line_width: int = 3
     fps: int = 60
 
 

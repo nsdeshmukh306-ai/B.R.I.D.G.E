@@ -130,6 +130,7 @@ class PlanarMarkerCalibration(CalibrationMethod):
         self._footprint_mask: Optional[np.ndarray] = None
         self._footprint_corners: Optional[np.ndarray] = None
         self._H_coarse: Optional[np.ndarray] = None
+        self._last_validation_pts: Optional[tuple[list[Point], list[Point]]] = None
 
     # --- geometry helpers ----------------------------------------------------------------
     def _radius(self, pw: int, ph: int) -> int:
@@ -291,6 +292,18 @@ class PlanarMarkerCalibration(CalibrationMethod):
                 last_msg = f"Validation markers not detected ({val.n_points} of 9 found); calibration not trusted."
                 log.warning("Calibration attempt %d: %s", attempt, last_msg)
                 continue
+            # Refinement: the independent validation points are unbiased extra correspondences.
+            # Re-fit on everything (least squares, RANSAC outlier rejection) for the final H; the
+            # reported accuracy stays the honest pre-refinement measurement on unseen points.
+            if val.valid and self._last_validation_pts is not None:
+                vc, vp = self._last_validation_pts
+                try:
+                    H_ref, _ = compute_homography(cam_pts + vc, proj_pts + vp, ransac_threshold=3.0)
+                    if np.all(np.isfinite(H_ref)):
+                        H = H_ref
+                        log.info("Homography refined on %d correspondences", len(cam_pts) + len(vc))
+                except HomographyError:
+                    pass
             result = CalibrationResult(success=val.valid, homography=Matrix3x3.from_numpy(H), validation=val,
                                        camera_points=cam_pts, projector_points=proj_pts, attempts=attempt,
                                        debug_frames=debug,
@@ -320,6 +333,7 @@ class PlanarMarkerCalibration(CalibrationMethod):
                 if det is not None:
                     cam_pts.append(det.center)
                     proj_pts.append(p)
+        self._last_validation_pts = (cam_pts, proj_pts) if len(cam_pts) >= 4 else None
         if len(cam_pts) < 4:
             return ValidationResult(mean_error_px=float("inf"), max_error_px=float("inf"), median_error_px=float("inf"),
                                     n_points=len(cam_pts), threshold_px=self.validator.threshold_px, valid=False,

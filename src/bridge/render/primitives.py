@@ -11,13 +11,21 @@ from bridge.spatial.geometry import Point
 RGB = tuple[int, int, int]
 
 
+ACCENT: RGB = (0, 220, 200)      # teal-cyan: primary highlight on the black canvas
+SUCCESS: RGB = (90, 230, 140)    # target zones / confirmations
+WARNING: RGB = (255, 180, 60)    # caution / uncertainty
+TEXT: RGB = (240, 244, 248)      # message text on black
+
+
 class Style(BaseModel):
-    color: RGB = (0, 150, 255)
-    thickness: int = 4
+    color: RGB = ACCENT
+    thickness: int = 3
     dashed: bool = False
     fill: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     animation: Literal["none", "pulse", "flow", "blink"] = "none"
+    glow: bool = True                          # soft additive halo (dark backgrounds only)
+    variant: Literal["auto", "ring", "reticle", "bracket"] = "auto"
 
 
 class _Base(BaseModel):

@@ -163,7 +163,7 @@ def test_config_load_save_and_env_secrets(tmp_path, monkeypatch):
     assert Secrets.from_env(None).gemini_api_key is None
     (tmp_path / ".env").write_text("GEMINI_API_KEY=abc123\n")
     assert Secrets.from_env(tmp_path / ".env").gemini_api_key == "abc123"
-    assert AppSettings().render.background == "white"
+    assert AppSettings().render.background == "black"
 
 
 def test_eventbus_isolates_bad_subscribers():

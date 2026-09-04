@@ -82,12 +82,21 @@ def reprojection_errors(H: np.ndarray, src: np.ndarray, dst: np.ndarray) -> np.n
 class CoordinateMapper:
     """Maps camera-space geometry to projector space (and back) with one homography."""
 
-    def __init__(self, homography: Matrix3x3 | np.ndarray):
-        self.H = homography.to_numpy() if isinstance(homography, Matrix3x3) else np.asarray(homography, dtype=np.float64)
+    def __init__(self, homography: Matrix3x3 | np.ndarray, trim: tuple[float, float] = (0.0, 0.0)):
+        H = homography.to_numpy() if isinstance(homography, Matrix3x3) else np.asarray(homography, dtype=np.float64)
+        # Registration trim: a small user-set translation in projector pixels, folded into H so
+        # every mapping (points, boxes, masks, inverse) stays consistent.
+        self.trim = (float(trim[0]), float(trim[1]))
+        T = np.array([[1, 0, self.trim[0]], [0, 1, self.trim[1]], [0, 0, 1]], dtype=np.float64)
+        self.H_raw = H
+        self.H = T @ H
         try:
             self.H_inv = np.linalg.inv(self.H)
         except np.linalg.LinAlgError as e:
             raise HomographyError("homography is singular") from e
+
+    def with_trim(self, dx: float, dy: float) -> "CoordinateMapper":
+        return CoordinateMapper(self.H_raw, (dx, dy))
 
     @classmethod
     def identity(cls) -> "CoordinateMapper":

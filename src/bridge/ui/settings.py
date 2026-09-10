@@ -46,6 +46,20 @@ class SettingsDialog(QDialog):
         self.marker_radius.setValue(s.calibration.marker_radius_px)
         form.addRow("Marker radius (px)", self.marker_radius)
 
+        self.process_width = QComboBox()
+        for w_ in (480, 640, 800, 960):
+            self.process_width.addItem(f"{w_} px", w_)
+        pw = self.process_width.findData(s.tracking.process_width)
+        self.process_width.setCurrentIndex(pw if pw >= 0 else 1)
+        form.addRow("Tracking resolution (lower = faster)", self.process_width)
+
+        self.lead_ms = QSpinBox()
+        self.lead_ms.setRange(0, 250)
+        self.lead_ms.setSingleStep(10)
+        self.lead_ms.setValue(s.tracking.lead_ms)
+        self.lead_ms.setToolTip("How far ahead the projected graphic is predicted, to cancel camera latency")
+        form.addRow("Motion prediction (ms)", self.lead_ms)
+
         self.tracker = QComboBox()
         self.tracker.addItems(["csrt", "kcf", "mosse", "mil", "color"])
         self.tracker.setCurrentText(s.tracking.backend)
@@ -80,6 +94,15 @@ class SettingsDialog(QDialog):
         form.addRow("Speech recognition", self.stt)
         self.wake_word = QLineEdit(v.wake_word)
         form.addRow("Wake word", self.wake_word)
+        self.mic = QComboBox()
+        self.mic.addItem("Default (this computer's microphone)", None)
+        from bridge.voice.audio import list_input_devices
+
+        for idx, name in list_input_devices():
+            self.mic.addItem(f"[{idx}] {name}", idx)
+        wanted = self.mic.findData(v.mic_device)
+        self.mic.setCurrentIndex(wanted if wanted >= 0 else 0)
+        form.addRow("Microphone", self.mic)
         self.tts_rate = QSpinBox()
         self.tts_rate.setRange(80, 320)
         self.tts_rate.setValue(v.tts_rate)
@@ -119,6 +142,8 @@ class SettingsDialog(QDialog):
         s.calibration.validation_threshold_px = self.cal_threshold.value()
         s.calibration.marker_radius_px = self.marker_radius.value()
         s.tracking.backend = self.tracker.currentText()  # type: ignore[assignment]
+        s.tracking.process_width = self.process_width.currentData()
+        s.tracking.lead_ms = self.lead_ms.value()
         s.ai.model = self.ai_model.text().strip() or s.ai.model
         s.ai.min_confidence = self.ai_conf.value()
         s.camera.width, s.camera.height = self.cam_w.value(), self.cam_h.value()
@@ -126,6 +151,7 @@ class SettingsDialog(QDialog):
         s.voice.enabled = self.voice_enabled.currentText() == "on"
         s.voice.stt_provider = self.stt.currentText()  # type: ignore[assignment]
         s.voice.wake_word = self.wake_word.text().strip() or "bridge"
+        s.voice.mic_device = self.mic.currentData()
         s.voice.tts_rate = self.tts_rate.value()
         s.voice.tts_voice = self.tts_voice.text().strip() or None
         s.voice.vad_threshold = self.vad.value()

@@ -47,8 +47,10 @@ class FrameSource(ABC):
 class CameraDevice(FrameSource):
     """A camera opened through OpenCV's VideoCapture."""
 
-    def __init__(self, info: CameraInfo, width: int | None = None, height: int | None = None, fps: float | None = None):
+    def __init__(self, info: CameraInfo, width: int | None = None, height: int | None = None, fps: float | None = None,
+                 auto_exposure: bool = True, exposure: float | None = None):
         self.info = info
+        self.auto_exposure, self.exposure = auto_exposure, exposure
         self.id = info.id
         self.name = info.name
         self.width = width or info.width or 1280
@@ -81,6 +83,21 @@ class CameraDevice(FrameSource):
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             cap.set(cv2.CAP_PROP_FPS, self.fps)
+            # Latency: never queue frames behind the consumer (Windows backends buffer several by default).
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # MJPG keeps 30 fps at 720p on USB2 webcams
+            except Exception:  # noqa: BLE001
+                pass
+            if not self.auto_exposure:
+                # 0.25 = manual on V4L2/most DSHOW drivers, 0.75 = auto. A fixed exposure keeps the
+                # frame rate up in a dark room (auto-exposure otherwise drops to ~8 fps) and stops
+                # the projected graphics from re-triggering exposure changes.
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+                if self.exposure is not None:
+                    cap.set(cv2.CAP_PROP_EXPOSURE, float(self.exposure))
+            else:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
             self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.width
             self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.height
             self.fps = float(cap.get(cv2.CAP_PROP_FPS)) or self.fps

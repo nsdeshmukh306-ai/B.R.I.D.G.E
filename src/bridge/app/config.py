@@ -20,6 +20,8 @@ class CameraSettings(BaseModel):
     width: int = 1280
     height: int = 720
     fps: int = 30
+    auto_exposure: bool = True      # set False + exposure for a stable frame rate in a dark room
+    exposure: Optional[float] = None  # backend-specific units (DSHOW: -6 ≈ 1/60 s, -5 ≈ 1/30 s)
 
 
 class ProjectorSettings(BaseModel):
@@ -37,6 +39,9 @@ class CalibrationSettings(BaseModel):
 
 class TrackingSettings(BaseModel):
     enabled: bool = True
+    process_width: int = 640        # frames are downscaled to this width for detection/tracking (latency)
+    smoothing: bool = True          # render-time motion smoothing + latency compensation
+    lead_ms: int = 60               # how far ahead the projected graphic is extrapolated (camera+processing latency)
     backend: Literal["csrt", "kcf", "mosse", "mil", "color"] = "csrt"  # falls back to colour re-detection if unavailable
     lost_after_frames: int = 15
     min_confidence: float = 0.3

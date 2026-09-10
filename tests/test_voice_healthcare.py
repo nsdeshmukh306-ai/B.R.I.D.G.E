@@ -173,3 +173,32 @@ def test_registration_trim_shifts_projection_and_persists(clinic):
     assert core.store.load("trim").trim_px == (12.0, -5.0)
     core.reset_registration_trim()
     assert core.registration_trim == (0.0, 0.0)
+
+
+def test_microphone_helpers_are_safe_without_audio_hardware():
+    """The default device is resolved automatically; with no audio the error names the fix."""
+    from bridge.voice.audio import MicrophoneSource, _resample_to, default_input_device, list_input_devices
+
+    devices = list_input_devices()
+    assert isinstance(devices, list)
+    default = default_input_device()
+    assert default is None or any(default == i for i, _ in devices)
+    try:
+        src = MicrophoneSource()  # device=None -> the computer's own default input
+    except RuntimeError as e:
+        assert "microphone" in str(e).lower() or "audio input" in str(e).lower()
+    else:
+        src.close()
+
+
+@pytest.mark.parametrize("src_rate", [48000, 44100, 16000])
+def test_resample_preserves_duration_and_level(src_rate):
+    from bridge.voice.audio import SAMPLE_RATE, _resample_to
+
+    t = np.arange(src_rate) / src_rate
+    tone = (np.sin(2 * np.pi * 220 * t) * 10000).astype(np.int16)
+    out = _resample_to(tone, src_rate, SAMPLE_RATE)
+    assert abs(len(out) - SAMPLE_RATE) <= 1
+    rms_in = np.sqrt((tone.astype(float) ** 2).mean())
+    rms_out = np.sqrt((out.astype(float) ** 2).mean())
+    assert abs(rms_out - rms_in) / rms_in < 0.05

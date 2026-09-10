@@ -30,48 +30,117 @@ class AudioSource(Protocol):
     def close(self) -> None: ...
 
 
-def list_input_devices() -> list[tuple[int, str]]:
+def _sd():
     try:
         import sounddevice as sd
+    except Exception as e:  # noqa: BLE001 - missing PortAudio, no audio subsystem, ...
+        raise RuntimeError(f"Audio input unavailable ({e}). Install with: pip install sounddevice") from e
+    return sd
 
-        out = []
-        for i, d in enumerate(sd.query_devices()):
-            if d.get("max_input_channels", 0) > 0:
-                out.append((i, d["name"]))
-        return out
+
+def list_input_devices() -> list[tuple[int, str]]:
+    """(index, name) of every device that can record. Empty if audio is unavailable."""
+    try:
+        sd = _sd()
+        return [(i, d["name"]) for i, d in enumerate(sd.query_devices()) if d.get("max_input_channels", 0) > 0]
     except Exception as e:  # noqa: BLE001
         log.info("No audio input devices available: %s", e)
         return []
 
 
+def default_input_device() -> Optional[int]:
+    """The computer's own default recording device (what Windows calls the default input)."""
+    try:
+        sd = _sd()
+        default = sd.default.device
+        idx = default[0] if isinstance(default, (list, tuple)) else default
+        if idx is not None and idx >= 0:
+            info = sd.query_devices(idx)
+            if info.get("max_input_channels", 0) > 0:
+                return int(idx)
+    except Exception as e:  # noqa: BLE001
+        log.debug("No default input device: %s", e)
+    devices = list_input_devices()
+    return devices[0][0] if devices else None
+
+
+def _resample_to(chunk: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    """Linear resample. Speech recognition is unaffected by the tiny interpolation error."""
+    if src_rate == dst_rate or chunk.size == 0:
+        return chunk
+    n_out = max(1, int(round(len(chunk) * dst_rate / src_rate)))
+    x_in = np.linspace(0.0, 1.0, num=len(chunk), endpoint=False)
+    x_out = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
+    return np.interp(x_out, x_in, chunk.astype(np.float32)).astype(np.int16)
+
+
 class MicrophoneSource:
-    """Live microphone via sounddevice. Raises RuntimeError if audio is unavailable."""
+    """Live microphone via sounddevice.
+
+    With no device given it opens the computer's default recording device, so a laptop's
+    built-in microphone works with nothing plugged in and nothing configured. Windows audio
+    backends frequently refuse 16 kHz mono, so the stream is opened at whatever rate the
+    device accepts and resampled to 16 kHz for the rest of the voice pipeline.
+    """
+
+    CANDIDATE_RATES = (16000, 48000, 44100, 32000, 22050, 8000)
 
     def __init__(self, device: int | str | None = None, sample_rate: int = SAMPLE_RATE, chunk_ms: int = CHUNK_MS):
-        try:
-            import sounddevice as sd
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(f"Microphone unavailable (sounddevice/PortAudio): {e}") from e
-        self.sample_rate = sample_rate
+        sd = _sd()
+        self.sample_rate = sample_rate           # what consumers see (always 16 kHz)
         self._q: queue.Queue[np.ndarray] = queue.Queue(maxsize=200)
         self._closed = threading.Event()
-        frames = int(sample_rate * chunk_ms / 1000)
+
+        if device is None:
+            device = default_input_device()
+            if device is None:
+                raise RuntimeError("No microphone found. Connect one, or check Windows sound settings "
+                                   "(Settings > System > Sound > Input).")
+        try:
+            info = sd.query_devices(device)
+            self.device_name = info.get("name", str(device))
+            device_rate = int(info.get("default_samplerate") or 0) or None
+            max_channels = max(1, int(info.get("max_input_channels", 1)))
+        except Exception:  # noqa: BLE001
+            self.device_name, device_rate, max_channels = str(device), None, 1
+
+        rates = [sample_rate] + ([device_rate] if device_rate else []) + list(self.CANDIDATE_RATES)
+        seen, attempts = set(), []
+        errors: list[str] = []
+        for rate in [r for r in rates if r and not (r in seen or seen.add(r))]:
+            for channels in (1, max_channels) if max_channels > 1 else (1,):
+                attempts.append((rate, channels))
+                try:
+                    self._open(sd, device, rate, channels, chunk_ms)
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{rate} Hz/{channels}ch: {e}")
+                    continue
+                self.device_rate, self.channels = rate, channels
+                log.info("Microphone opened: %s (device %s) at %d Hz, %d channel(s)%s",
+                         self.device_name, device, rate, channels,
+                         "" if rate == sample_rate else f" -> resampled to {sample_rate} Hz")
+                return
+        available = ", ".join(f"[{i}] {n}" for i, n in list_input_devices()) or "none"
+        raise RuntimeError(f"Could not open microphone '{self.device_name}'. Tried {len(attempts)} format(s); "
+                           f"last error: {errors[-1] if errors else 'unknown'}. Available inputs: {available}")
+
+    def _open(self, sd, device, rate: int, channels: int, chunk_ms: int) -> None:
+        frames = max(1, int(rate * chunk_ms / 1000))
+        target = self.sample_rate
 
         def cb(indata, _frames, _time, status):  # noqa: ANN001
             if status:
                 log.debug("audio status: %s", status)
+            mono = indata[:, 0] if indata.ndim > 1 else indata
             try:
-                self._q.put_nowait(indata[:, 0].copy())
+                self._q.put_nowait(_resample_to(np.ascontiguousarray(mono), rate, target))
             except queue.Full:
-                pass
+                pass  # consumer is behind; dropping old audio keeps latency low
 
-        try:
-            self._stream = sd.InputStream(samplerate=sample_rate, channels=1, dtype="int16", blocksize=frames,
-                                          device=device, callback=cb)
-            self._stream.start()
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(f"Could not open microphone: {e}") from e
-        log.info("Microphone opened device=%s rate=%d", device, sample_rate)
+        stream = sd.InputStream(samplerate=rate, channels=channels, dtype="int16", blocksize=frames,
+                                device=device, callback=cb)
+        stream.start()
+        self._stream = stream
 
     def chunks(self) -> Iterator[np.ndarray]:
         while not self._closed.is_set():

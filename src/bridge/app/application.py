@@ -71,9 +71,11 @@ class BridgeCore:
         )
         r = self.settings.render
         self.renderer = ProjectionRenderer(1280, 720, r.background, r.custom_background_rgb)
-        self.executor = CommandExecutor(self.renderer, TargetResolver(), self.settings.tracking.backend,
-                                        self.settings.tracking.lost_after_frames, r.accent_rgb, r.line_width, r.target_style,
-                                        on_status=lambda s: self.bus.publish(Topic.STATUS_MESSAGE, text=s, level="info"))
+        t = self.settings.tracking
+        self.executor = CommandExecutor(self.renderer, TargetResolver(), t.backend, t.lost_after_frames,
+                                        r.accent_rgb, r.line_width, r.target_style,
+                                        on_status=lambda s: self.bus.publish(Topic.STATUS_MESSAGE, text=s, level="info"),
+                                        process_width=t.process_width, smoothing=t.smoothing, lead_ms=t.lead_ms)
         self.executor.on_target_lost = lambda: self.bus.publish(Topic.TRACKING_LOST)
         self.planner = CommandPlanner(self.settings.ai.min_confidence)
         self.ai: Optional[AIProvider] = None
@@ -104,7 +106,7 @@ class BridgeCore:
 
     def select_camera(self, info: CameraInfo) -> bool:
         cs = self.settings.camera
-        ok = self.cameras.open(info, cs.width, cs.height, cs.fps)
+        ok = self.cameras.open(info, cs.width, cs.height, cs.fps, cs.auto_exposure, cs.exposure)
         if ok:
             self.state.diagnostics.camera_connected = True
             self.state.diagnostics.camera_name = info.name

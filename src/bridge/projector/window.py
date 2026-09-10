@@ -15,10 +15,24 @@ from bridge.render.renderer import ProjectionRenderer
 log = logging.getLogger("bridge.projector")
 
 
+MAX_CANVAS_HEIGHT = 1080  # render internally at <=1080p; the window upscales (4K native rendering cost ~330 ms/frame)
+
+
+def internal_canvas_size(width: int, height: int, max_height: int = MAX_CANVAS_HEIGHT) -> tuple[int, int]:
+    """Canvas resolution used for rendering/calibration on a display of the given size."""
+    if height <= max_height:
+        return int(width), int(height)
+    scale = max_height / height
+    return int(round(width * scale / 2) * 2), int(max_height)
+
+
 def ndarray_to_qimage(bgr: np.ndarray) -> QImage:
+    """Wrap a BGR frame as a QImage WITHOUT copying or channel swapping. The caller must keep
+    `bgr` alive while the QImage is in use (ProjectionWindow keeps a reference)."""
     h, w = bgr.shape[:2]
-    rgb = np.ascontiguousarray(bgr[:, :, ::-1])
-    return QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+    if not bgr.flags["C_CONTIGUOUS"]:
+        bgr = np.ascontiguousarray(bgr)
+    return QImage(bgr.data, w, h, 3 * w, QImage.Format.Format_BGR888)
 
 
 class ProjectionWindow(QWidget):
@@ -36,6 +50,7 @@ class ProjectionWindow(QWidget):
         self.renderer = renderer
         self._override: Optional[np.ndarray] = None
         self._image: Optional[QImage] = None
+        self._frame_ref: Optional[np.ndarray] = None  # keeps the QImage's buffer alive
         self.display: Optional[DisplayDevice] = None
         self._timer = QTimer(self)
         self._timer.setInterval(max(1, int(1000 / max(1, fps))))
@@ -45,7 +60,10 @@ class ProjectionWindow(QWidget):
     # -- lifecycle ------------------------------------------------------------------------
     def show_on(self, display: DisplayDevice) -> None:
         self.display = display
-        self.renderer.set_size(display.width, display.height)
+        cw, ch = internal_canvas_size(display.width, display.height)
+        self.renderer.set_size(cw, ch)
+        if (cw, ch) != (display.width, display.height):
+            log.info("Rendering at %dx%d, upscaled to %dx%d on %s", cw, ch, display.width, display.height, display.name)
         screens = QGuiApplication.screens()
         target = None
         for s in screens:
@@ -96,6 +114,7 @@ class ProjectionWindow(QWidget):
 
     def _tick(self) -> None:
         frame = self.current_frame()
+        self._frame_ref = frame
         self._image = ndarray_to_qimage(frame)
         for fn in list(self.frame_listeners):
             try:
@@ -107,8 +126,9 @@ class ProjectionWindow(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         if self._image is None:
-            painter.fillRect(self.rect(), Qt.GlobalColor.white)
+            painter.fillRect(self.rect(), Qt.GlobalColor.black)
         else:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             painter.drawImage(self.rect(), self._image)
         painter.end()
 

@@ -44,6 +44,8 @@ BRIDGE replies with one sentence ("Found syringe." "Step 2 of 7. Light blue cap:
 
 ## Tuning the microphone
 
+BRIDGE records from **this computer's default input device** unless you pick another one in Settings, so a laptop's built-in microphone works with nothing plugged in. Windows audio backends often refuse 16 kHz mono, so the stream is opened at whatever rate the device accepts (48 kHz, 44.1 kHz, ...) and resampled to 16 kHz internally. If no device can be opened, the error names the device it tried and lists the inputs it can see.
+
 `voice.vad_threshold` (RMS, 0–1) is the speech threshold; the effective threshold is `max(threshold, 3 × noise floor)`. Lower it if BRIDGE misses quiet speech, raise it if it triggers on background noise. `silence_ms` is how long a pause ends an utterance; `max_utterance_s` caps a single command. `mic_device` selects an input by index (`python -c "import sounddevice; print(sounddevice.query_devices())"`).
 
 ## Privacy

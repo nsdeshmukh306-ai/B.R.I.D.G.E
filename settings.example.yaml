@@ -7,6 +7,8 @@ camera:
   width: 1280
   height: 720
   fps: 30
+  auto_exposure: true        # false + exposure below keeps the frame rate up in a dark room
+  exposure: null             # DirectShow units, e.g. -6 is about 1/60 s
 projector:
   preferred_display: null
 calibration:
@@ -18,6 +20,9 @@ calibration:
   max_retries: 3
 tracking:
   enabled: true
+  process_width: 640         # detection/tracking run on a frame downscaled to this width
+  smoothing: true            # 60 fps motion smoothing + latency compensation
+  lead_ms: 60                # how far ahead the graphic is predicted (camera + processing latency)
   backend: csrt
   lost_after_frames: 15
   min_confidence: 0.3
@@ -40,7 +45,7 @@ voice:
   tts_voice: null            # substring of an installed voice name
   wake_word: bridge
   require_wake_word: false
-  mic_device: null
+  mic_device: null           # null = this computer's default microphone
   vad_threshold: 0.012
   silence_ms: 800
   max_utterance_s: 12.0

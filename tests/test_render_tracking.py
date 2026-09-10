@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from bridge.render.primitives import Style
 from bridge.render.renderer import ProjectionRenderer, calibration_pattern
@@ -135,3 +136,87 @@ def test_tracker_handles_tiny_bbox_without_crash():
     st = tr.start(Detection.from_bbox("x", BoundingBox(x=50, y=50, w=1, h=1), 0.5, "t"), frame)
     assert st is not None
     tr.update(frame)
+
+
+def test_motion_model_is_smoother_and_less_laggy_than_raw_measurements():
+    """Camera at 10 fps, projector at 60 fps: the graphic must glide and not trail the object."""
+    from bridge.render.motion import TargetMotion
+
+    def run(smoothing: bool):
+        m = TargetMotion(x=0, y=0, w=40, h=40, t0=0.0, lead_s=0.06 if smoothing else 0.0,
+                         tau_pos=0.075 if smoothing else 0.0001)
+        jumps, errors, prev = [], [], None
+        for i in range(360):
+            t = i / 60.0
+            if i % 6 == 0:  # a measurement every 100 ms, 50 ms old when it arrives
+                m.observe(300.0 * (t - 0.05), 0.0, 40, 40, t)
+            x, _, _, _ = m.sample(t)
+            if prev is not None and t > 1.0:
+                jumps.append(abs(x - prev))
+                errors.append(abs(x - 300.0 * t))
+            prev = x
+        return max(jumps), float(np.mean(errors))
+
+    raw_jump, raw_error = run(False)
+    smooth_jump, smooth_error = run(True)
+    assert smooth_jump < raw_jump * 0.7      # visible stepping halved
+    assert smooth_error < raw_error * 0.5    # prediction cancels most of the pipeline latency
+    assert smooth_error < 10.0
+
+
+def test_motion_settles_exactly_on_a_stationary_target():
+    from bridge.render.motion import TargetMotion
+
+    m = TargetMotion(x=0, y=0, w=40, h=40, t0=0.0, lead_s=0.06)
+    for i in range(30):  # moving...
+        m.observe(300.0 * (i / 10.0), 0.0, 40, 40, i / 10.0)
+        m.sample(i / 10.0)
+    for i in range(120):  # ...then stops
+        t = 3.0 + i / 60.0
+        if i % 6 == 0:
+            m.observe(900.0, 0.0, 40, 40, t)
+        x, y, _, _ = m.sample(t)
+    assert abs(x - 900.0) < 0.5 and abs(y) < 0.5
+
+
+def test_lock_on_and_fade_out_animation():
+    from bridge.render.motion import TargetMotion
+
+    m = TargetMotion(x=10, y=10, w=20, h=20, t0=0.0)
+    assert m.radius_scale(0.0) > 2.0 and m.opacity(0.0) < 0.3   # opens wide, faint
+    assert abs(m.radius_scale(0.5) - 1.0) < 0.01 and m.opacity(0.5) > 0.99
+    m.release(1.0)
+    assert m.opacity(1.0) == 1.0 and m.opacity(1.4) == 0.0 and m.status == "lost"
+
+
+def test_executor_processes_downscaled_frames_but_reports_camera_coordinates(sim):
+    """Tracking runs at process_width for latency; every coordinate leaving the executor is
+    in full camera pixels, so the homography stays valid."""
+    from bridge.interaction.commands import HighlightObject, TargetSpec
+    from bridge.interaction.executor import CommandExecutor
+    from bridge.render.renderer import ProjectionRenderer
+    from bridge.spatial.homography import CoordinateMapper
+
+    world, proj, cam = sim
+    frame = cam.render()
+    ex = CommandExecutor(ProjectionRenderer(1280, 720), tracking_backend="color", process_width=480)
+    ex.set_mapper(CoordinateMapper(cam.ground_truth_cam_to_proj()))
+    gt = cam.object_bbox_in_camera(world.get("obj-screwdriver"))
+    r = ex.execute(HighlightObject(target=TargetSpec(label="screwdriver", description="red-handled",
+                                                    boxes_camera=[gt])), frame)
+    assert r.ok and ex.proc_scale == pytest.approx(480 / frame.shape[1])
+    st = ex.last_states[0]
+    assert st.center.distance_to(gt.center) < 25          # camera pixels, not processing pixels
+    assert st.bbox.x2 <= frame.shape[1] + 5
+    states = ex.update(cam.render())
+    assert states and states[0].center.distance_to(gt.center) < 30
+
+
+def test_renderer_pre_render_hooks_run_every_frame():
+    seen = []
+    r = ProjectionRenderer(64, 64)
+    r.pre_render_hooks.append(lambda t: seen.append(t))
+    r.pre_render_hooks.append(lambda t: 1 / 0)  # a broken animator must not stop the projector
+    r.render(0.1)
+    r.render(0.2)
+    assert seen == [0.1, 0.2]

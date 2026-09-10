@@ -100,9 +100,10 @@ class CameraManager:
             self.available = []
         return self.available
 
-    def open(self, info: CameraInfo, width: int | None = None, height: int | None = None, fps: float | None = None) -> bool:
+    def open(self, info: CameraInfo, width: int | None = None, height: int | None = None, fps: float | None = None,
+             auto_exposure: bool = True, exposure: float | None = None) -> bool:
         self.close()
-        dev = CameraDevice(info, width, height, fps)
+        dev = CameraDevice(info, width, height, fps, auto_exposure, exposure)
         if not dev.open():
             self.bus.publish(Topic.STATUS_MESSAGE, text=f"Camera '{info.name}' unavailable", level="error")
             return False

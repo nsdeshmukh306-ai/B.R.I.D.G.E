@@ -14,6 +14,7 @@ RGB = tuple[int, int, int]
 ACCENT: RGB = (0, 220, 200)      # teal-cyan: primary highlight on the black canvas
 SUCCESS: RGB = (90, 230, 140)    # target zones / confirmations
 WARNING: RGB = (255, 180, 60)    # caution / uncertainty
+ALERT: RGB = (255, 90, 90)       # lost target / stop
 TEXT: RGB = (240, 244, 248)      # message text on black
 
 

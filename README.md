@@ -40,7 +40,8 @@ User: "Where is the syringe?"  (spoken or typed)
 * **Measured calibration** — reprojection error is computed on independent validation points and stored; nothing is assumed.
 * **Never project uncertainty as certainty** — low confidence → "Target uncertain. Please clarify."; tracking lost → stale graphics are cleared.
 * **Simulation mode** — a virtual clinic bench (or workshop table), draggable objects, virtual camera and projector run the *same* code paths, so everything can be developed and tested without hardware.
-* **Voice** — hands-free commands and spoken replies; wake word optional; push-to-talk for noisy rooms.
+* **Voice** — hands-free commands and spoken replies through the computer's own microphone; wake word optional; push-to-talk for noisy rooms.
+* **Real-time projection** — tracking on downscaled frames, a ≤1080p internal canvas, and a per-object motion model that smooths and predicts between camera frames, so graphics glide at projector frame rate instead of stepping with the camera.
 * **Guided procedures** — spoken checklists with the current item highlighted on the bench; custom procedures as JSON.
 
 ## Architecture

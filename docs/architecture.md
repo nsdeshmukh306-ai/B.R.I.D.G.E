@@ -67,6 +67,32 @@ Future ChArUco / Gray-code methods only need to implement `CalibrationMethod`.
 
 The camera sees what the projector draws. Before every tracker update the executor renders a mask of the current graphics in projector space, warps it into camera space with `H⁻¹`, dilates it and replaces those pixels with a blurred background estimate (`vision/suppression.py`). Without this the tracker latches onto the projected ring around the object (measured in simulation: max following error 48 px → 25 px).
 
+## Latency and smooth motion
+
+Three things decide whether the projection feels live:
+
+| stage | cost (720p camera, 4K projector) | how it is kept low |
+|---|---|---|
+| camera capture | 8–30 fps | `CAP_PROP_BUFFERSIZE=1` so a frame is never queued behind the consumer, MJPG at 720p, optional fixed exposure (auto-exposure collapses to ~8 fps in a dark room) |
+| detection + tracking | 65 ms → 15 ms | frames are downscaled to `tracking.process_width` (default 640 px) before detection/tracking; results are scaled back to camera pixels before they reach the homography |
+| projector rendering | 332 ms → 8 ms | the canvas is rendered at ≤1080p and upscaled by the window (`internal_canvas_size`), and the QImage wraps the buffer instead of copying and swapping channels |
+| motion between measurements | judder + trailing | `render/motion.py`: per-object velocity estimate, exponential smoothing and forward extrapolation evaluated at projector frame rate |
+
+`TargetMotion` is the reason the graphic can look smooth on a slow camera. Every camera measurement calls `observe()`; every rendered frame calls `sample()`, which extrapolates the last measurement forward by its own age, the pipeline latency (`tracking.lead_ms`) and the smoothing filter's own lag, then eases the drawn position toward that prediction. Velocity decays when no new measurement arrives, so a stopped object never drifts. Measured on a 10 fps camera against a 300 px/s target: peak per-frame jump 13.0 → 7.5 px, mean error against ground truth 18.0 → 4.3 px.
+
+Primitives are created once per target and *moved* each frame by `CommandExecutor._animate`, registered as a `ProjectionRenderer.pre_render_hook`. That keeps rendering independent of the camera: a slow camera makes the reticle less accurate, never less smooth.
+
+## Colour as state
+
+| colour | meaning |
+|---|---|
+| teal `ACCENT` | locked on and tracking |
+| amber `WARNING` | re-acquiring, low confidence, or an uncertain answer |
+| green `SUCCESS` | target zone / where to place something |
+| red `ALERT` | target lost |
+
+The reticle also animates its state: it converges from wide open and fades in over ~0.4 s when it locks on, and fades out when the target is released.
+
 ## Safety behaviour
 
 | Condition | Behaviour |

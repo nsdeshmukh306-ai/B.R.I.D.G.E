@@ -231,7 +231,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.chk_wake)
         row.addWidget(self.chk_speak)
         gl.addLayout(row)
-        self.lbl_voice_state = QLabel("Voice: off")
+        self.lbl_voice_state = QLabel("Voice: off  (uses this computer's microphone)")
         self.lbl_voice_state.setObjectName("subtitle")
         gl.addWidget(self.lbl_voice_state)
         self.lbl_transcript = QLabel("")
@@ -522,7 +522,8 @@ class MainWindow(QMainWindow):
             if not ok:
                 self.btn_listen.setChecked(False)
                 self.lbl_voice_state.setText(f"Voice: {msg}")
-                QMessageBox.warning(self, "BRIDGE voice", msg)
+                QMessageBox.warning(self, "BRIDGE voice", msg + "\n\nBRIDGE uses this computer's default microphone. "
+                                    "Pick a specific one under Settings > Microphone if that is not the right input.")
                 return
             self.btn_listen.setText("🎙  LISTENING")
         else:

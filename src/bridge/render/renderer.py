@@ -9,6 +9,7 @@ rings and corner brackets for targets, pill-shaped labels, tapered arrows.
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import Optional
@@ -29,6 +30,7 @@ BACKGROUNDS = {
     "transparent": (0, 0, 0),  # a projector shows nothing for black: closest thing to transparent
 }
 FONT = cv2.FONT_HERSHEY_DUPLEX
+log = logging.getLogger("bridge.render")
 
 
 def _bgr(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -64,6 +66,9 @@ class ProjectionRenderer:
         self.frames_rendered = 0
         self.last_frame: Optional[np.ndarray] = None
         self.last_frame_version = -1
+        # Called with the render timestamp just before each frame is rasterized, so motion
+        # can be evaluated at display rate (60 fps) rather than at camera rate.
+        self.pre_render_hooks: list = []
 
     # ---- public API mirroring the spec -------------------------------------------------
     def circle(self, center: Point, radius: float, style: Style | None = None, group: str | None = None) -> str:
@@ -120,6 +125,11 @@ class ProjectionRenderer:
 
     def render(self, t: Optional[float] = None) -> np.ndarray:
         t = (time.perf_counter() - self._t0) if t is None else t
+        for hook in list(self.pre_render_hooks):
+            try:
+                hook(t)
+            except Exception:  # noqa: BLE001 - a bad animator must never stop the projector
+                log.exception("pre-render hook failed")
         img = self._blank()
         items = self.scene.items()
         if items and self.dark:

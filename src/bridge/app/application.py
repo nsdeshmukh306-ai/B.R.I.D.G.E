@@ -97,6 +97,9 @@ class BridgeCore:
         self.voice = None  # VoiceAssistant, created by start_voice()
         self._tts = None
         self.last_spoken_reply = ""
+        self.assistant = None  # JarvisAssistant, created by start_assistant()
+        if self.settings.assistant.enabled:
+            self.start_assistant()
 
     # ---- hardware -------------------------------------------------------------------------
     def refresh_devices(self) -> tuple[list[CameraInfo], list[DisplayDevice]]:
@@ -265,6 +268,34 @@ class BridgeCore:
         h, w = frame.shape[:2]
         return self.execute(self.planner.plan(ident, w, h), frame)
 
+    # ---- surgical assistant ---------------------------------------------------------------------
+    def start_assistant(self) -> "JarvisAssistant":  # type: ignore[name-defined] # noqa: F821
+        """Create the always-on assistant layer (scene memory, counts, case, monitor)."""
+        from bridge.assistant.jarvis import JarvisAssistant
+
+        if self.assistant is not None:
+            return self.assistant
+        a = self.settings.assistant
+        s = self.settings.surgical
+        self.assistant = JarvisAssistant(self, scan_hz=a.scan_hz, ai_label_interval_s=a.ai_label_interval_s,
+                                         monitor_interval_s=a.monitor_interval_s, proactive=a.proactive,
+                                         records_dir=a.records_dir)
+        self.assistant.show_board = a.show_count_board
+        m = self.assistant.monitor
+        m.sharp_grace_s, m.field_item_grace_s = s.sharp_grace_s, s.field_item_grace_s
+        m.absence_grace_s, m.cooldown_s = s.absence_grace_s, s.alert_cooldown_s
+        self.assistant.on_alert = lambda al: self.bus.publish(Topic.SAFETY_ALERT, alert=al)
+        self.assistant.on_state = lambda: self.bus.publish(Topic.COUNT_UPDATED)
+        self.assistant.case.on_phase = lambda p: self.bus.publish(Topic.CASE_PHASE, phase=p)
+        self.assistant.start()
+        log.info("Surgical assistant started (proactive=%s, scan=%.0f Hz)", a.proactive, a.scan_hz)
+        return self.assistant
+
+    def stop_assistant(self) -> None:
+        if self.assistant is not None:
+            self.assistant.stop()
+            self.assistant = None
+
     # ---- spoken interaction --------------------------------------------------------------------
     def spoken_reply(self, result: ExecutionResult) -> str:
         """Turn an execution result into one short sentence for the voice channel."""
@@ -303,6 +334,14 @@ class BridgeCore:
         if not text:
             return ""
         text = strip_wake_word(text, self.settings.voice.wake_word) or text
+        if self.assistant is not None:
+            # The assistant owns reference resolution, the local intent grammar, the
+            # count sheet and the case; it falls back to the guide and then the AI.
+            reply = self.assistant.handle(text)
+            self.last_spoken_reply = reply
+            # Replies go through the announcer so a critical alert can preempt them.
+            self.assistant.say(reply, "reply")
+            return reply
         reply = self.guide.handle_control_word(text)
         if reply is None:
             t = text.lower().rstrip("?.! ")
@@ -321,7 +360,14 @@ class BridgeCore:
 
     def speak(self, text: str) -> None:
         if self._tts is not None and text:
+            if self.voice is not None:
+                self.voice._speaking_text = text  # noqa: SLF001 - echo rejection needs the text
             self._tts.speak(text)
+
+    def stop_speaking(self) -> None:
+        """Cut off speech immediately (barge-in, or a critical alert preempting)."""
+        if self._tts is not None:
+            self._tts.stop()
 
     def start_voice(self, stt_kind: str | None = None) -> tuple[bool, str]:
         """Start hands-free listening. Returns (ok, message)."""
@@ -345,7 +391,10 @@ class BridgeCore:
         capture = UtteranceCapture(threshold=v.vad_threshold, silence_ms=v.silence_ms, max_utterance_s=v.max_utterance_s)
         self.voice = VoiceAssistant(lambda: MicrophoneSource(v.mic_device), stt, self._tts, self.handle_spoken,
                                     wake_word=v.wake_word, require_wake_word=v.require_wake_word,
-                                    on_event=lambda e: self.bus.publish(Topic.VOICE_EVENT, event=e), capture=capture)
+                                    on_event=lambda e: self.bus.publish(Topic.VOICE_EVENT, event=e), capture=capture,
+                                    barge_in=v.barge_in,
+                                    # with the assistant running, the announcer owns the voice channel
+                                    speak_reply=self.assistant is None)
         try:
             self.voice.start()
         except RuntimeError as e:
@@ -441,6 +490,10 @@ class BridgeCore:
     def invalidate_calibration(self, reason: str) -> None:
         self.calibration.invalidate(reason)
         self.executor.set_mapper(None)
+        if self.assistant is not None:
+            # Tray slots and zones are camera-space: a moved camera makes them lies.
+            self.assistant.layout.clear()
+            self.assistant.overlay.clear()
         self.state.set_calibration(CalibrationStatus.NOT_CALIBRATED)
         self.bus.publish(Topic.CALIBRATION_INVALIDATED, reason=reason)
         self.bus.publish(Topic.STATUS_MESSAGE, text=reason, level="warning")
@@ -467,6 +520,8 @@ class BridgeCore:
             # In simulation nothing else pumps the renderer into the virtual projector
             # (the ProjectionWindow does this in physical mode).
             self.projector_link.show_image(self.renderer.render())
+        if self.assistant is not None:
+            self.assistant.on_frame(frame)   # throttled internally; never blocks the camera
         if not self.settings.tracking.enabled:
             return
         states = self.executor.update(frame)
@@ -487,6 +542,7 @@ class BridgeCore:
 
     def shutdown(self) -> None:
         self.stop_voice()
+        self.stop_assistant()
         if self._tts is not None:
             self._tts.close()
         self.cameras.close()

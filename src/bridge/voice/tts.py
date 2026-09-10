@@ -41,6 +41,8 @@ class Pyttsx3TTS(TextToSpeech):
         self._q: queue.Queue[Optional[str]] = queue.Queue()
         self._ready = threading.Event()
         self._error: Optional[str] = None
+        self._engine = None          # set by the worker thread; used by stop() for barge-in
+        self.speaking = False
         self._thread = threading.Thread(target=self._run, name="tts", daemon=True)
         self._thread.start()
         self._ready.wait(5.0)
@@ -63,12 +65,14 @@ class Pyttsx3TTS(TextToSpeech):
             self._error = f"TTS engine failed to start: {e}"
             self._ready.set()
             return
+        self._engine = engine
         self._ready.set()
         while True:
             text = self._q.get()
             if text is None:
                 break
             try:
+                self.speaking = True
                 if self.on_speaking:
                     self.on_speaking(True)
                 engine.say(text)
@@ -76,12 +80,30 @@ class Pyttsx3TTS(TextToSpeech):
             except Exception as e:  # noqa: BLE001
                 log.warning("TTS failed: %s", e)
             finally:
+                self.speaking = False
                 if self.on_speaking:
                     self.on_speaking(False)
 
     def speak(self, text: str) -> None:
         if text.strip():
             self._q.put(text.strip())
+
+    def stop(self) -> None:
+        """Barge-in: drop everything queued and cut off the current utterance."""
+        while True:
+            try:
+                item = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:            # keep a pending shutdown request
+                self._q.put(None)
+                break
+        eng = self._engine
+        if eng is not None:
+            try:
+                eng.stop()
+            except Exception as e:  # noqa: BLE001 - some drivers refuse stop() mid-utterance
+                log.debug("TTS stop ignored: %s", e)
 
     def close(self) -> None:
         self._q.put(None)
@@ -95,6 +117,8 @@ class SilentTTS(TextToSpeech):
     def __init__(self) -> None:
         super().__init__()
         self.spoken: list[str] = []
+        self.stops = 0
+        self.speaking = False
 
     def speak(self, text: str) -> None:
         if text.strip():
@@ -103,6 +127,9 @@ class SilentTTS(TextToSpeech):
             if self.on_speaking:
                 self.on_speaking(True)
                 self.on_speaking(False)
+
+    def stop(self) -> None:
+        self.stops += 1
 
 
 def build_tts(enabled: bool, rate: int = 175, voice_hint: str | None = None) -> TextToSpeech:

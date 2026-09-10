@@ -51,3 +51,25 @@ BRIDGE records from **this computer's default input device** unless you pick ano
 ## Privacy
 
 Audio is only captured while LISTEN is on or push-to-talk is held. With the `gemini` provider each utterance clip is sent to Google's API; use `whisper` for fully local recognition.
+
+## Always-on conversation
+
+With the surgical assistant enabled (`assistant.enabled`, the default), the voice
+channel changes in three ways.
+
+**Barge-in.** Speaking while BRIDGE is talking cuts it off mid-sentence
+(`voice.barge_in`). The microphone also hears BRIDGE's own voice through the
+speakers, so a captured utterance is compared against what is being spoken and
+discarded when it is mostly the same words — a real interruption ("stop", "no,
+the other one") shares almost nothing with the sentence in progress.
+
+**One prioritised voice.** Replies and proactive alerts share the channel through
+an `Announcer`: a critical alert preempts and clears the queue, a reply jumps
+ahead of background chatter because someone is waiting for it, a caution waits
+its turn and is dropped if it goes stale, and identical text within 20 seconds is
+dropped outright.
+
+**Follow-ups.** The last subject is remembered for three minutes, so "and the
+other one", "point to it" and "where is it" resolve locally without a round-trip.
+
+See [docs/surgical.md](docs/surgical.md) for the full command vocabulary.

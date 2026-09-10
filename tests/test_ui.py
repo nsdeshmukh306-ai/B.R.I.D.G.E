@@ -34,6 +34,48 @@ def test_main_window_opens_and_enters_simulation(qapp, tmp_path):
     win.close()
 
 
+def test_surgical_panel_drives_a_case_and_shows_the_count_board(qapp, tmp_path):
+    """Every button on the panel goes through the same spoken entry point as the voice."""
+    from bridge.app.application import BridgeCore
+    from bridge.app.config import ConfigManager
+    from bridge.surgical.monitor import Alert
+    from bridge.ui.main_window import MainWindow
+
+    cfg = ConfigManager(tmp_path / "s2.yaml")
+    cfg.settings.mode = "simulation"
+    cfg.settings.profiles_dir = tmp_path / "p2"
+    cfg.settings.log_dir = tmp_path / "l2"
+    cfg.settings.assistant.records_dir = tmp_path / "records"
+    core = BridgeCore(cfg)
+    win = MainWindow(core)
+    win.show()
+    qapp.processEvents()
+    panel = win.surgical
+    assert panel.isEnabled() and panel.cb_set.count() > 0
+
+    panel.cb_set.setCurrentIndex(panel.cb_set.findData("minor"))
+    panel._start_case()
+    qapp.processEvents()
+    assert core.assistant.case.active
+
+    panel._say("start the count")
+    panel._say("count as per the sheet")
+    panel.refresh(force=True)
+    qapp.processEvents()
+    assert panel.table.rowCount() == len(core.assistant.counts.lines)
+    assert "reconciled" in panel.lbl_phase.text()
+
+    panel.on_alert(Alert(key="k", level="critical", text="Count discrepancy."))
+    qapp.processEvents()
+    assert "Count discrepancy." in panel.lbl_alerts.text()
+
+    panel.chk_board.setChecked(False)
+    qapp.processEvents()
+    assert core.assistant.show_board is False
+    win.close()
+    core.shutdown()
+
+
 def test_projection_window_renders_offscreen(qapp):
     from bridge.projector.window import ProjectionWindow
     from bridge.render.renderer import ProjectionRenderer

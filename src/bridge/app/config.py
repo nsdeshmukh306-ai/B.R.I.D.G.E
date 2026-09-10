@@ -66,6 +66,27 @@ class VoiceSettings(BaseModel):
     vad_threshold: float = 0.012
     silence_ms: int = 800
     max_utterance_s: float = 12.0
+    barge_in: bool = True                # speaking over BRIDGE cuts it off mid-sentence
+
+
+class AssistantSettings(BaseModel):
+    """The always-on surgical assistant layer."""
+
+    enabled: bool = True
+    proactive: bool = True               # BRIDGE may speak first when something is wrong
+    scan_hz: float = 5.0                 # scene-graph updates per second (local CV, cheap)
+    ai_label_interval_s: float = 12.0    # how often the model is asked to name what it sees
+    monitor_interval_s: float = 1.0
+    show_count_board: bool = True        # project the live count board onto the surface
+    records_dir: Path = Path("case_records")
+
+
+class SurgicalSettings(BaseModel):
+    default_set: str = "minor"           # instrument set used when none is named
+    sharp_grace_s: float = 20.0          # a sharp off the tray this long earns a warning
+    field_item_grace_s: float = 45.0
+    absence_grace_s: float = 6.0         # how long something must be unseen before it counts as missing
+    alert_cooldown_s: float = 45.0
 
 
 class RenderSettings(BaseModel):
@@ -89,6 +110,8 @@ class AppSettings(BaseModel):
     ai: AISettings = Field(default_factory=AISettings)
     render: RenderSettings = Field(default_factory=RenderSettings)
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
+    assistant: AssistantSettings = Field(default_factory=AssistantSettings)
+    surgical: SurgicalSettings = Field(default_factory=SurgicalSettings)
     domain: Literal["healthcare", "general"] = "healthcare"
 
 

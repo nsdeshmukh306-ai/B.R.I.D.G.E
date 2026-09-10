@@ -8,13 +8,27 @@ BRIDGE connects a commodity USB camera, a commodity projector (any OS display) a
 
 It is **voice-first** (microphone → Gemini or offline Whisper → spoken replies) and built for **healthcare workspaces** — phlebotomy trays, medication preparation, instrument counts, dressing kits, PPE, specimen handling — with hard rules: BRIDGE locates items and guides protocol steps; it never diagnoses, prescribes or decides doses. See [docs/healthcare.md](docs/healthcare.md) and [docs/voice.md](docs/voice.md).
 
+On top of that sits an **always-on surgical assistant**: it keeps a live model of everything on the tray, holds a conversation ("and the other one"), drives a whole case through a WHO-style checklist, runs the instrument and sponge count hands-free, and **speaks first** when the numbers stop adding up. See [docs/surgical.md](docs/surgical.md).
+
 The projection canvas is **black**: the projector emits nothing except the graphics, so the room stays dark-friendly and the camera never fights a white wash.
 
 ## What BRIDGE does
 
 ```
-User: "Where is the syringe?"  (spoken or typed)
+User: "Project the scalpel."  (spoken or typed)
         │
+        ▼
+   Safety gate    ──►  dosing/diagnosis refused in code, before anything else
+        │
+        ▼
+   Reference res. ──►  "the other one" -> "the other artery clamp"
+        │
+        ▼
+   Local grammar  ──►  counts, case control, status        (microseconds)
+        │
+        ▼
+   Scene graph    ──►  already know where the scalpel is?  (microseconds)
+        │  no
         ▼
    Gemini (WHAT)  ──►  intent=find_object, target=syringe, box=[…]
         │
@@ -43,6 +57,9 @@ User: "Where is the syringe?"  (spoken or typed)
 * **Voice** — hands-free commands and spoken replies through the computer's own microphone; wake word optional; push-to-talk for noisy rooms.
 * **Real-time projection** — tracking on downscaled frames, a ≤1080p internal canvas, and a per-object motion model that smooths and predicts between camera frames, so graphics glide at projector frame rate instead of stepping with the camera.
 * **Guided procedures** — spoken checklists with the current item highlighted on the bench; custom procedures as JSON.
+* **Scene memory** — a persistent model of every object on the surface, so a known item is projected without an AI round-trip and "what's missing?" outlines the empty slot on the tray.
+* **Surgical counts** — hands-free initial/added/closing/final counts with the arithmetic read back, a live count board projected on the drape, and a JSON case record at sign-out.
+* **Speaks first** — a rule engine watching the tray raises a spoken, projected alert when a sponge or sharp cannot be accounted for, with cooldowns so it never becomes an alarm people ignore.
 
 ## Architecture
 
@@ -62,7 +79,13 @@ src/bridge/
 │                 CommandExecutor (command → resolve → track → map → render), Task state machine
 ├── render/       ProjectionRenderer (OpenCV rasterizer), primitives, animation, Scene
 ├── simulation/   VirtualWorld (clinic / workshop scenes), SimulatedProjector, SimulatedCamera (ground-truth homographies)
-├── voice/        MicrophoneSource + VAD, SpeechToText (Gemini / Whisper / mock), TextToSpeech (pyttsx3), VoiceAssistant
+├── voice/        MicrophoneSource + VAD, SpeechToText (Gemini / Whisper / mock), TextToSpeech (pyttsx3),
+│                 VoiceAssistant (always-on, barge-in, echo rejection)
+├── perception/   SceneGraph: persistent entities, association, presence decay, AI labels on local geometry
+├── assistant/    Conversation (reference resolution), local intent grammar, Announcer (priority speech),
+│                 JarvisAssistant (routes every utterance; owns case, counts, monitor)
+├── surgical/     instrument sets, CountSession (the arithmetic), TrayLayout + Zone, CaseSession (WHO
+│                 checklist + case record), SafetyMonitor (proactive rules)
 ├── healthcare/   domain prompt context, safety policy, procedure library, ProcedureGuide (voice-driven steps)
 ├── ui/           PySide6 MainWindow, CalibrationWizard, SettingsDialog, widgets
 └── main.py       entry point
@@ -110,6 +133,7 @@ python -m bridge.main      # same as `bridge`
 3. **Surface** — Table / Wall / Custom (all planar in V1; the preset is stored in the profile).
 4. **AUTO CALIBRATE** — the wizard projects bright markers one at a time on a dark background, detects them with the camera, fits a homography, then projects an independent 3×3 validation grid and measures the reprojection error. You get `Accuracy: 2.8 px` and **SAVE** writes `profiles/default.json`. Next time the same camera + display is found the profile is loaded automatically.
 5. Say **"Where is the syringe?"** (LISTEN starts automatically once calibrated) or type it and press **EXECUTE**.
+   For a case: **"start a case for a minor set"** → **"start the count"** → count aloud → **"final count"** → **"close the case"**.
 6. If the reticle sits slightly off the item, enable **Click-to-project test** and nudge with the arrow keys (Shift = 10 px, R = reset). The trim is saved with the profile.
 
 The banner switches to **BRIDGE READY** once a valid calibration is active.
@@ -148,9 +172,11 @@ render: {background: white, target_style: pulse, accent_rgb: [0, 150, 255], line
 
 ```bash
 pip install -e ".[dev]"
-pytest                    # 100 tests: geometry, homography, calibration vs simulator ground truth (incl. 4K projector +
+pytest                    # 191 tests: geometry, homography, calibration vs simulator ground truth (incl. 4K projector +
                           # small dark camera), AI schema validation, command validation, rendering, tracking, voice
-                          # pipeline on synthetic audio, healthcare safety + procedures, full simulated demo, GUI smoke
+                          # pipeline on synthetic audio, healthcare safety + procedures, scene graph, surgical count
+                          # arithmetic, case autopilot, proactive monitor rules, intent grammar, reference resolution,
+                          # speech priority queue, full simulated demo and case, GUI smoke
 bridge --headless-selftest
 ```
 
@@ -172,10 +198,12 @@ See [docs/troubleshooting.md](docs/troubleshooting.md). The most common issues: 
 * Objects have height; a planar homography maps the surface, so tall items seen by an off-axis camera register slightly off their base — use the registration trim for a fixed setup.
 * Voice recognition needs a reasonably quiet room or push-to-talk; the `gemini` provider sends audio clips to Google, `whisper` keeps them local.
 * BRIDGE is not a medical device: it locates and guides, it never diagnoses, prescribes or decides doses.
+* The surgical count is an **aid to** the team's count, never a replacement for it. A camera cannot see inside a wound or under a drape, so what BRIDGE observes is reported separately from what a person counted, and a reconciled count is never presented as permission to close.
+* Scene labels come from the AI and are only as good as the view: similar instruments in a pile, heavy occlusion by hands, or a moved camera all degrade recognition. Items BRIDGE cannot name are reported as unnamed rather than guessed.
 
 ## Roadmap
 
-Object-removal verification with hand tracking → per-hospital procedure packs → ChArUco / ArUco calibration → Gray-code structured light and dense correspondence → automatic surface detection and non-planar surfaces → better markerless tracking → hand tracking for action verification → guided assembly workflows on the existing task state machine → voice input → multiple cameras/projectors → other AI providers (OpenAI, local VLMs) → installers (Windows first).
+Per-hospital checklist and count-sheet packs → RFID/barcode cross-check for sponges → object-removal verification with hand tracking → per-hospital procedure packs → ChArUco / ArUco calibration → Gray-code structured light and dense correspondence → automatic surface detection and non-planar surfaces → better markerless tracking → hand tracking for action verification → guided assembly workflows on the existing task state machine → voice input → multiple cameras/projectors → other AI providers (OpenAI, local VLMs) → installers (Windows first).
 
 ## License
 

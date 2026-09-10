@@ -21,6 +21,7 @@ from bridge.projector.window import ProjectionWindow
 from bridge.spatial.geometry import Point
 from bridge.ui.calibration_wizard import CalibrationWizard
 from bridge.ui.settings import SettingsDialog
+from bridge.ui.surgical_panel import SurgicalPanel
 from bridge.ui.widgets import ImageView, LogPanel, run_in_background
 
 log = logging.getLogger("bridge.ui")
@@ -266,6 +267,10 @@ class MainWindow(QMainWindow):
         gl.addWidget(self.lbl_step)
         pl.addWidget(g)
 
+        # ---- surgical case + count ----
+        self.surgical = SurgicalPanel(self.core)
+        pl.addWidget(self.surgical)
+
         row = QHBoxLayout()
         self.btn_settings = QPushButton("Settings")
         self.btn_settings.clicked.connect(self.open_settings)
@@ -338,6 +343,7 @@ class MainWindow(QMainWindow):
         bus.subscribe(Topic.TRACKING_LOST, lambda e: self.status_signal.emit("Target lost.", "warning"))
         bus.subscribe(Topic.VOICE_EVENT, lambda e: self.voice_signal.emit(e.payload["event"]))
         bus.subscribe(Topic.PROCEDURE_STEP, lambda e: self.step_signal.emit(e.payload["step"], e.payload["index"], e.payload["total"]))
+        bus.subscribe(Topic.SAFETY_ALERT, lambda e: self.surgical.on_alert(e.payload["alert"]))
 
     def _on_status(self, text: str, level: str) -> None:
         self.statusBar().showMessage(text, 8000)
@@ -699,6 +705,7 @@ class MainWindow(QMainWindow):
         else:
             self._set_status(self.lbl_cal_status, f"Status: {cal.value}", False)
         self.lbl_diag.setText(diagnostics_report(st))
+        self.surgical.refresh()
 
     def _set_status(self, label: QLabel, text: str, ok: bool) -> None:
         label.setText(text)

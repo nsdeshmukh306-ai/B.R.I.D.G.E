@@ -32,6 +32,9 @@ class Topic(str, Enum):
     SCENE_UPDATED = "scene.updated"
     VOICE_EVENT = "voice.event"
     PROCEDURE_STEP = "procedure.step"
+    SAFETY_ALERT = "safety.alert"        # proactive announcement from the surgical monitor
+    CASE_PHASE = "case.phase"            # the case autopilot moved to a new phase
+    COUNT_UPDATED = "count.updated"      # the count sheet changed
 
 
 @dataclass

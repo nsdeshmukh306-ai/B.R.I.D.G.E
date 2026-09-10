@@ -46,7 +46,22 @@ voice:
   wake_word: bridge
   require_wake_word: false
   mic_device: null           # null = this computer's default microphone
+  barge_in: true             # speaking over BRIDGE cuts it off mid-sentence
   vad_threshold: 0.012
   silence_ms: 800
   max_utterance_s: 12.0
+assistant:
+  enabled: true              # the always-on surgical assistant (scene memory, counts, case, alerts)
+  proactive: true            # BRIDGE may speak first when something is wrong
+  scan_hz: 5.0               # scene-graph updates per second (local CV, no AI)
+  ai_label_interval_s: 12.0  # how often the model is asked to name what it sees
+  monitor_interval_s: 1.0
+  show_count_board: true     # project the live count board onto the surface
+  records_dir: case_records
+surgical:
+  default_set: minor         # minor | laparotomy | suture_tray | central_line, or your own in sets/
+  sharp_grace_s: 20.0        # a sharp off the tray this long earns a warning
+  field_item_grace_s: 45.0
+  absence_grace_s: 6.0       # how long something must be unseen before it counts as missing
+  alert_cooldown_s: 45.0
 domain: healthcare

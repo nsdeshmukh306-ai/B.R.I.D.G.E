@@ -110,3 +110,42 @@ The reticle also animates its state: it converges from wide open and fades in ov
 ## Future extension points
 
 Multiple cameras/projectors (one `CoordinateMapper` per pair), non-planar surfaces (replace `CoordinateMapper` with a ray-mapping implementation behind the same interface), other AI providers (`AIProvider`), other trackers (`_make_cv_tracker`).
+
+## The assistant layer
+
+`BridgeCore.handle_spoken` delegates to `JarvisAssistant.handle`, which is the
+single router for everything spoken or typed:
+
+```
+raw utterance
+   -> healthcare safety gate            refuse dosing/diagnosis in code, before interpretation
+   -> running procedure's control words on the raw words: "next" is literal, never rewritten
+   -> reference resolution              "the other one" -> "the other artery clamp"
+   -> local intent grammar              counts, case control, status, mute      (microseconds)
+   -> scene graph                       already know where it is?               (microseconds)
+   -> procedure guide + legacy phrases
+   -> Gemini                            open-ended requests only
+```
+
+Only the last step touches the network, and whatever it finds is folded back into
+the scene graph so the same question is answered locally next time.
+
+| module | owns |
+|---|---|
+| `perception/scene_graph.py` | object identity over time: association, presence decay, AI labels attached to local geometry |
+| `assistant/conversation.py` | dialogue memory and pronoun/ellipsis rewriting |
+| `assistant/intents.py` | the closed vocabulary matched without the model |
+| `assistant/announce.py` | one voice channel, priority queue, preemption, dedupe |
+| `surgical/counts.py` | the count arithmetic (the team's numbers, kept apart from the camera's) |
+| `surgical/case.py` | case phases, checklist, case record |
+| `surgical/monitor.py` | rules that let BRIDGE speak first |
+| `render/overlay.py` | count board, tray gaps and alert banner, in their own scene groups |
+
+Threading: `JarvisAssistant.on_frame` runs on the camera thread, throttled to
+`assistant.scan_hz`, and never blocks — AI scene labelling is dispatched to a
+short-lived worker. `handle` runs on the voice or UI thread under one lock. The
+`Announcer` owns its own thread so a slow TTS engine cannot stall either.
+
+Overlays live in the `hud`, `gaps` and `alert` scene groups, disjoint from the
+executor's `target`, `zone` and `message` groups, so tracking graphics and the
+count board never clobber each other.

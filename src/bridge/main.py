@@ -47,6 +47,18 @@ def selftest(core) -> int:
     spoken = core.handle_spoken("start the order of draw")
     print(f"voice -> {spoken[:80]}...")
     ok = r.ok and core.guide.active
+    core.handle_spoken("stop procedure")
+    # the surgical assistant: start a case, count in, reconcile, close
+    if core.assistant is not None:
+        core.handle_spoken("start a case for a minor set")
+        core.handle_spoken("start the count")
+        print(f"count -> {core.handle_spoken('count as per the sheet')[:80]}...")
+        core.handle_spoken("final count")
+        for line in core.assistant.counts.lines:
+            line.counted_final = line.baseline
+        closing = core.handle_spoken("close the case")
+        print(f"case  -> {closing[:80]}...")
+        ok = ok and "reconciles" in closing
     core.shutdown()
     log.info("Self-test finished")
     return 0 if ok else 3

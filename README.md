@@ -1,10 +1,59 @@
-# BRIDGE — Spatial AI for Healthcare
+<div align="center">
+
+# BRIDGE
+### Spatial AI for Healthcare
 
 **B**rain **R**easoning **I**ntelligence **D**irected into **G**rounded **E**nvironments
 
-> Don't bring the human into the computer. Bring the computer's intelligence into the human's physical environment.
+*Don't bring the human into the computer. Bring the computer's intelligence into the human's physical environment.*
 
-![How BRIDGE works — local perception runs continuously on-device, Gemini is only called to name something new, output lands on the projector and through voice](docs/preview_architecture.png)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-00B4A6?style=flat-square&logo=python&logoColor=white)](#installation)
+[![License](https://img.shields.io/badge/License-MIT-E2A119?style=flat-square)](#license)
+[![Design](https://img.shields.io/badge/Design-Local--First-00B4A6?style=flat-square)](#architecture)
+[![Voice](https://img.shields.io/badge/Voice-Offline--Capable-00B4A6?style=flat-square)](#gemini-api-setup)
+[![Status](https://img.shields.io/badge/Status-Active%20Development-E2A119?style=flat-square)](#roadmap)
+
+</div>
+
+<p align="center">
+  <img src="docs/preview_architecture.png" alt="How BRIDGE works — local perception runs continuously on-device, Gemini is only called to name something new, output lands on the projector and through voice" width="850">
+</p>
+
+<div align="center">
+
+|  |  |
+|---|---|
+| **Runs on** | any USB webcam + a spare display or projector |
+| **AI model** | Google Gemini — optional, budget-capped, never required for safety features |
+| **Works with no internet** | tracking, counting, checklists, alerts — all of it |
+| **Voice** | offline by default (Whisper), hands-free or push-to-talk |
+| **Not** | a medical device — it locates and counts, it doesn't diagnose |
+
+</div>
+
+<br>
+
+## Table of contents
+
+- [Healthcare AI shouldn't need a hospital's IT budget to work](#healthcare-ai-shouldnt-need-a-hospitals-it-budget-to-work)
+- [What it actually does](#what-it-actually-does)
+- [How a request actually gets handled](#how-a-request-actually-gets-handled)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Gemini API setup](#gemini-api-setup)
+- [Running](#running)
+- [First run, on real hardware](#first-run-on-real-hardware)
+- [Calibration](#calibration)
+- [Simulation mode](#simulation-mode)
+- [Diagnostics and logging](#diagnostics-and-logging)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+<br>
 
 ## Healthcare AI shouldn't need a hospital's IT budget to work
 
@@ -14,6 +63,8 @@ So BRIDGE is built local-first on purpose. The camera, the tracking, the instrum
 
 None of this makes BRIDGE a medical device. It doesn't diagnose, it doesn't prescribe, and it doesn't decide doses. What it does is watch a bench or a tray, keep count, guide a checklist out loud, and speak up the moment something doesn't add up — the unglamorous, repetitive safety work that's easy to get wrong in a room that's busy and short-staffed, which describes more operating rooms than anyone likes to admit.
 
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
+
 ## What it actually does
 
 Point a camera and a projector at a table. Say *"Where is the syringe?"* and a glowing reticle lands on the physical syringe; move it, and the reticle follows. Say *"Start the order of draw"* and BRIDGE highlights each blood tube in sequence while narrating the step. Start a case, and it runs the instrument and sponge count hands-free — initial, additions, closing, final — reads the arithmetic back to you, projects a live count board onto the drape, and writes a JSON case record when you close out.
@@ -22,9 +73,13 @@ Underneath the voice interface is an always-on assistant that keeps a running mo
 
 The projection surface is black. The projector puts out nothing but the graphics themselves, so the room stays dark-friendly and the camera isn't fighting a wash of white light.
 
-![The control panel and a live projection — instrument reticle, count board, and diagnostics with the actual panel names and colors from the app](docs/preview_interface.png)
+<p align="center">
+  <img src="docs/preview_interface.png" alt="The control panel and a live projection — instrument reticle, count board, and diagnostics with the actual panel names and colors from the app" width="850">
+</p>
 
-*Both images above are recreated from the real layout, copy and colors in the codebase (`main_window.py`, `render/`) — not live captures, since I don't have hardware plugged in for this write-up. Real photos are going in as soon as I take them.*
+<p align="center"><sub>Both images above are recreated from the real layout, copy and colors in the codebase (<code>main_window.py</code>, <code>render/</code>) — not live captures, since I don't have hardware plugged in for this write-up. Real photos are going in as soon as I take them.</sub></p>
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
 
 ## How a request actually gets handled
 
@@ -71,7 +126,9 @@ A few things that stay true no matter what's plugged in:
 * **Calibration is measured, not assumed** — reprojection error is computed on validation points that were never used to fit the homography, and it's the number BRIDGE reports, not a guess.
 * **Uncertainty stays uncertainty** — low confidence becomes "Target uncertain, please clarify," not a wrong answer stated with confidence. Lost tracking clears the graphic instead of leaving a stale one behind.
 * **Simulation mode** — a virtual bench with draggable objects, a virtual camera and a virtual projector run the exact same code paths as the real thing, so the whole system can be built and tested without any hardware at all.
-* **Voice, hands-free or push-to-talk** — hold the **P** key for a noisy room, or leave it listening continuously with an optional wake word. Speech recognition defaults to an offline model (Whisper), so a conversation with BRIDGE doesn't have to leave the building either.
+* **Voice, hands-free or push-to-talk** — hold <kbd>P</kbd> for a noisy room, or leave it listening continuously with an optional wake word. Speech recognition defaults to an offline model (Whisper), so a conversation with BRIDGE doesn't have to leave the building either.
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
 
 ## Architecture
 
@@ -106,6 +163,8 @@ src/bridge/
 
 Four concerns stay deliberately separate — **AI reasoning** (`ai/`), **perception** (`vision/`), **spatial mapping** (`spatial/`), and **rendering** (`render/`) — and only meet inside `interaction/executor.py`. Full detail in [docs/architecture.md](docs/architecture.md).
 
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
+
 ## Installation
 
 Requirements: Python 3.11+, a desktop OS (Windows, macOS, Linux).
@@ -118,7 +177,9 @@ pip install -e ".[dev,offline-stt]"
 
 Core dependencies: `numpy`, `opencv-contrib-python` (CSRT/KCF trackers), `PySide6`, `pydantic`, `pyyaml`, `google-genai`, `screeninfo`, `sounddevice` (microphone), `pyttsx3` (speech output). Optional extras: `faster-whisper` for the default offline speech recognition (`.[offline-stt]`, recommended — first run downloads a small model once, then works with no network) and `mediapipe` for hand tracking (`.[hands]`).
 
-> Install **only** `opencv-contrib-python`, not `opencv-python` alongside it. Without the contrib build, BRIDGE still runs but falls back to the colour/contour tracker instead of CSRT/KCF.
+> **Note:** install **only** `opencv-contrib-python`, not `opencv-python` alongside it. Without the contrib build, BRIDGE still runs but falls back to the colour/contour tracker instead of CSRT/KCF.
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
 
 ## Gemini API setup
 
@@ -129,6 +190,8 @@ GEMINI_API_KEY=your_key_here
 ```
 
 The key is read from the environment or `.env` only — it's never written to `settings.yaml`, and `.env` is git-ignored. The model defaults to `gemini-3.6-flash` (override in Settings or with `BRIDGE_AI_MODEL`). Google retires model IDs on its own schedule, so if requests start failing with `404 NOT_FOUND`, check [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) for the current one. A soft spend cap (`ai.budget_inr`, default ₹500) stops calls once BRIDGE's own running cost estimate crosses it — local tracking and the UI keep working regardless. Full detail, including how quota and outage errors are handled, in [docs/gemini.md](docs/gemini.md).
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
 
 ## Running
 
@@ -142,13 +205,15 @@ python -m bridge.main      # same as `bridge`
 ## First run, on real hardware
 
 1. **Camera** — pick your webcam in the CAMERA box. The status goes green and the live view appears.
-2. **Display / projector** — the projector is just a second display; BRIDGE pre-selects the secondary one. Press **OPEN PROJECTION** and a borderless black canvas opens fullscreen on it (Esc closes it). **Test graphics** confirms you can actually see a circle, an arrow and a label on the surface.
+2. **Display / projector** — the projector is just a second display; BRIDGE pre-selects the secondary one. Press **OPEN PROJECTION** and a borderless black canvas opens fullscreen on it (<kbd>Esc</kbd> closes it). **Test graphics** confirms you can actually see a circle, an arrow and a label on the surface.
 3. **Surface** — Table, Wall or Custom. Planar in this version; the choice is stored in the profile.
 4. **AUTO CALIBRATE** — the wizard projects bright markers one at a time against a dark background, finds them with the camera, fits a homography, then checks itself against an independent 3×3 validation grid and reports the reprojection error. You'll see something like `Accuracy: 2.6 px`, and **SAVE** writes `profiles/default.json`. The same camera-and-display pairing loads it automatically next time.
 5. Say **"Where is the syringe?"** (listening starts on its own once calibration is valid) or type it and press **EXECUTE**. For a case: **"start a case for a minor set"** → **"start the count"** → count out loud → **"final count"** → **"close the case."**
-6. If the reticle lands slightly off the item, turn on **Click-to-project test** and nudge it with the arrow keys (Shift for 10px steps, R to reset). The trim gets saved with the profile.
+6. If the reticle lands slightly off the item, turn on **Click-to-project test** and nudge it with the arrow keys (<kbd>Shift</kbd> for 10px steps, <kbd>R</kbd> to reset). The trim gets saved with the profile.
 
-The banner reads **BRIDGE READY** once a valid calibration is active, and while it's active you can hold **P** anywhere in the window to push-to-talk a single command.
+The banner reads **BRIDGE READY** once a valid calibration is active, and while it's active you can hold <kbd>P</kbd> anywhere in the window to push-to-talk a single command.
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
 
 ## Calibration
 
@@ -165,6 +230,8 @@ Pick **Simulation** in the MODE box, or start with `--simulation`. You get a vir
 ## Diagnostics and logging
 
 The right-hand panel shows camera FPS and resolution, display info, calibration status and mean error, the current tracked target and its confidence, the AI provider's status, last-request latency, and running session spend against the budget cap. Logs go to the console, to `logs/bridge.log` (rotating), and to the in-app LOG panel. Set `log_level: DEBUG` in `settings.yaml` or pass `--log-level DEBUG` for more detail.
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
 
 ## Configuration
 
@@ -196,11 +263,15 @@ bridge --headless-selftest
 
 Tests run headless (`QT_QPA_PLATFORM=offscreen`, set in `tests/conftest.py`). Add a calibration method by subclassing `spatial.calibration.CalibrationMethod` and registering it in `build_method`; add an AI provider by subclassing `ai.base.AIProvider` and registering it in `ai.mock.build_provider`; add a tracker backend in `vision.tracking._make_cv_tracker`.
 
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
+
 ## Troubleshooting
 
 See [docs/troubleshooting.md](docs/troubleshooting.md). The usual suspects: the camera can't see the projected markers (too bright a room, auto-exposure fighting it), the projection window opened on the wrong display, or `opencv-python` shadowing `opencv-contrib-python`.
 
-## Known limitations
+<details>
+<summary><b>Known limitations</b> (click to expand)</summary>
+<br>
 
 * Calibration is a planar homography — valid for flat surfaces (table, wall, floor) only. Curved or multi-plane surfaces are out of scope for this version.
 * The setup needs to stay put. Moving the camera or the projector invalidates calibration.
@@ -215,10 +286,25 @@ See [docs/troubleshooting.md](docs/troubleshooting.md). The usual suspects: the 
 * The instrument and sponge count is an aid to the team's own count, not a replacement for it. A camera can't see inside a wound or under a drape, so what BRIDGE observed is reported separately from what a person counted, and a reconciled count is never treated as permission to close.
 * Scene labels are only as good as the view. Similar instruments piled together, heavy occlusion by hands, or a camera that's moved all degrade recognition. Anything BRIDGE can't confidently name is reported as unnamed, not guessed at.
 
+</details>
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>
+
 ## Roadmap
 
-Per-hospital checklist and count-sheet packs, RFID/barcode cross-checking for sponges, object-removal verification with hand tracking, ChArUco/ArUco calibration, structured-light dense correspondence for automatic and non-planar surface detection, better markerless tracking, guided assembly workflows on the existing task state machine, multiple cameras and projectors, additional AI providers (OpenAI, local vision-language models where hardware allows), and installers, Windows first.
+- [ ] Per-hospital checklist and count-sheet packs
+- [ ] RFID/barcode cross-checking for sponges
+- [ ] Object-removal verification with hand tracking
+- [ ] ChArUco/ArUco calibration
+- [ ] Structured-light dense correspondence for automatic, non-planar surface detection
+- [ ] Better markerless tracking
+- [ ] Guided assembly workflows on the existing task state machine
+- [ ] Multiple cameras and projectors
+- [ ] Additional AI providers (OpenAI, local vision-language models where hardware allows)
+- [ ] Installers, Windows first
 
 ## License
 
 MIT.
+
+<div align="right"><a href="#bridge">⬆ back to top</a></div>

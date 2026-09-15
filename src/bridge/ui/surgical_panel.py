@@ -24,13 +24,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-STATUS_STYLE = {
-    "ok": "#5ae68c",
-    "short": "#ff5a5a",
-    "over": "#ffb43c",
-    "pending": "#a8b0bb",
-}
-LEVEL_STYLE = {"critical": "#ff5a5a", "caution": "#ffb43c", "info": "#a8b0bb"}
+from bridge.ui.widgets import BORDER, FIELD_BG, SEVERITY_CAUTION, SEVERITY_CRITICAL, SEVERITY_NEUTRAL, SEVERITY_OK
+
+# Same three-colour severity system as the rest of the app (see widgets.py) -- a count line
+# that is short or over uses the same red/amber the proactive monitor's alerts do, so the
+# board and the alert banner never disagree about what "urgent" looks like.
+STATUS_STYLE = {"ok": SEVERITY_OK, "short": SEVERITY_CRITICAL, "over": SEVERITY_CAUTION, "pending": SEVERITY_NEUTRAL}
+LEVEL_STYLE = {"critical": SEVERITY_CRITICAL, "caution": SEVERITY_CAUTION, "info": SEVERITY_NEUTRAL}
 
 
 class SurgicalPanel(QGroupBox):
@@ -58,6 +58,7 @@ class SurgicalPanel(QGroupBox):
         row.addWidget(self.cb_set, 1)
         self.btn_start = QPushButton("START CASE")
         self.btn_start.setObjectName("primary")
+        self.btn_start.setMinimumHeight(44)          # the case-defining action: largest target on the panel
         self.btn_start.clicked.connect(self._start_case)
         row.addWidget(self.btn_start)
         lay.addLayout(row)
@@ -88,12 +89,14 @@ class SurgicalPanel(QGroupBox):
         lay.addLayout(row)
 
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["item", "count", "seen"])
+        self.table.setHorizontalHeaderLabels(["ITEM", "COUNT", "SEEN"])
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)   # readable at a glance, not cramped
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.setMinimumHeight(150)
+        self.table.setMinimumHeight(170)
         lay.addWidget(self.table, 1)
 
         row = QHBoxLayout()
@@ -113,13 +116,20 @@ class SurgicalPanel(QGroupBox):
         row.addWidget(self.btn_missing)
         self.btn_close = QPushButton("CLOSE CASE")
         self.btn_close.setObjectName("danger")
+        self.btn_close.setMinimumHeight(44)           # matches START CASE: the other case-defining action
         self.btn_close.clicked.connect(lambda: self._say("close the case"))
         row.addWidget(self.btn_close)
         lay.addLayout(row)
 
-        self.lbl_alerts = QLabel("")
+        # Alert banner: a filled block, not just coloured text, so a critical alert is
+        # legible at a glance rather than something that has to be read to be noticed.
+        self.lbl_alerts = QLabel("No alerts.")
         self.lbl_alerts.setWordWrap(True)
         self.lbl_alerts.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_alerts.setStyleSheet(
+            f"background: {FIELD_BG}; border: 1px solid {BORDER}; border-radius: 8px; "
+            f"padding: 10px; color: {SEVERITY_NEUTRAL}; font-size: 13px;"
+        )
         lay.addWidget(self.lbl_alerts)
         self._alerts: list[str] = []
 
@@ -148,8 +158,8 @@ class SurgicalPanel(QGroupBox):
         self.alert_signal.emit(alert)
 
     def _append_alert(self, alert) -> None:
-        colour = LEVEL_STYLE.get(getattr(alert, "level", "info"), "#a8b0bb")
-        self._alerts.append(f'<span style="color:{colour}">■ {alert.text}</span>')
+        colour = LEVEL_STYLE.get(getattr(alert, "level", "info"), SEVERITY_NEUTRAL)
+        self._alerts.append(f'<span style="color:{colour}; font-weight:700;">■ {alert.text}</span>')
         self._alerts = self._alerts[-4:]
         self.lbl_alerts.setText("<br>".join(reversed(self._alerts)))
 

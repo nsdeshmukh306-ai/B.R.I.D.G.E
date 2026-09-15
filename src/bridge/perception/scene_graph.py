@@ -115,7 +115,7 @@ class SceneEntity:
     color: str = ""
     confidence: float = 0.5
     label_confidence: float = 0.0
-    source: str = "local"            # local | ai | ai+local | manual
+    source: str = "local"            # local | ai | specialist-local | ai+local | specialist-local+local | manual
     first_seen: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     last_moved: float = field(default_factory=time.time)
@@ -217,6 +217,31 @@ class SceneGraph:
         with self._lock:
             return [e for e in self._entities.values() if e.label]
 
+    def unresolved_label_ids(self, min_confidence: float = 0.5) -> set[str]:
+        """IDs of *present* entities that are unlabelled, or labelled with low confidence.
+
+        Local contour detection is noisy (a shadow, a tray edge, a wrinkle in gauze
+        can all produce a stable-looking entity that is not a real countable object),
+        so some entities may never earn a confident label no matter how many times a
+        vision pass looks at them. The caller (JarvisAssistant) is expected to compare
+        this set to the one from its *previous* check: a call is worth spending only
+        when this set contains an id that was not already unresolved last time —
+        otherwise it is the same handful of not-a-real-object blobs asking to be told
+        the same "no" again.
+        """
+        with self._lock:
+            return {e.id for e in self._entities.values()
+                   if e.present and (not e.label or e.label_confidence < min_confidence)}
+
+    def needs_ai_label(self, min_confidence: float = 0.5) -> bool:
+        """True when at least one present entity is unlabelled or low-confidence.
+
+        A simple existence check — useful on its own, but JarvisAssistant's background
+        loop uses `unresolved_label_ids` instead so it can tell a *new* unresolved
+        entity apart from one that was already asked about and stayed unresolved.
+        """
+        return bool(self.unresolved_label_ids(min_confidence))
+
     def find(self, text: str, present_only: bool = True, limit: int = 0,
              threshold: float = 0.5) -> list[SceneEntity]:
         """Resolve a spoken phrase to entities, best first. No AI, no network."""
@@ -298,10 +323,15 @@ class SceneGraph:
         return delta
 
     def apply_ai(self, labelled_boxes: Iterable[tuple[str, BoundingBox, float, str]],
-                 now: float | None = None) -> int:
-        """Attach AI labels to existing entities (or create them). Returns entities labelled.
+                 now: float | None = None, source: str = "ai") -> int:
+        """Attach model-supplied labels to existing entities (or create them).
 
         `labelled_boxes` items are (label, bbox_camera, confidence, description).
+        `source` records which labeller this came from ("ai" for Gemini,
+        "specialist-local" for the local instrument recognizer, etc.) — it is
+        advisory metadata only; the merge and matching logic is identical for
+        every source, and local CV still owns position regardless of who
+        supplied the label. Returns the number of entities labelled.
         """
         now = now if now is not None else time.time()
         n = 0
@@ -310,10 +340,10 @@ class SceneGraph:
             for label, box, conf, desc in labelled_boxes:
                 if not label:
                     continue
-                ent = self._best_match(Detection.from_bbox(label, box, conf, "ai"), self._entities)
+                ent = self._best_match(Detection.from_bbox(label, box, conf, source), self._entities)
                 if ent is None:
                     ent = SceneEntity(id=f"e{next(_ids)}", bbox=box, label=label, confidence=conf,
-                                      label_confidence=conf, source="ai", first_seen=now, last_seen=now,
+                                      label_confidence=conf, source=source, first_seen=now, last_seen=now,
                                       last_moved=now)
                     self._entities[ent.id] = ent
                 else:
@@ -323,7 +353,7 @@ class SceneGraph:
                         ent.label, ent.label_confidence = label, conf
                     else:
                         ent.aliases.add(label)
-                    ent.source = "ai+local" if ent.source == "local" else ent.source
+                    ent.source = f"{source}+local" if ent.source == "local" else ent.source
                 if desc:
                     ent.aliases.add(desc[:60])
                 n += 1

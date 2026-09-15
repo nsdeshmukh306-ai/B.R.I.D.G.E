@@ -168,11 +168,12 @@ class SimulationOracleProvider(AIProvider):
         return ActionPlan(instruction="All steps complete", target="", confidence=1.0, done=True)
 
 
-def build_provider(kind: str, api_key: str | None, model: str, timeout_s: float = 30.0, simulation=None) -> AIProvider:
+def build_provider(kind: str, api_key: str | None, model: str, timeout_s: float = 30.0, simulation=None,
+                   budget_inr: float | None = None, usd_to_inr: float = 88.0) -> AIProvider:
     if kind == "gemini":
         from bridge.ai.gemini import GeminiProvider
 
-        return GeminiProvider(api_key, model, timeout_s)
+        return GeminiProvider(api_key, model, timeout_s, budget_inr=budget_inr, usd_to_inr=usd_to_inr)
     if kind == "mock":
         if simulation is not None:
             world, camera = simulation

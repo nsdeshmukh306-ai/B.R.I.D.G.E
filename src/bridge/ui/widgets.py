@@ -11,30 +11,103 @@ from PySide6.QtWidgets import QLabel, QPlainTextEdit, QSizePolicy, QWidget
 
 from bridge.spatial.geometry import Point
 
-STYLESHEET = """
-QMainWindow, QDialog, QWizard { background: #14171c; }
-QWidget { color: #e6e9ef; font-size: 13px; }
-QGroupBox { border: 1px solid #2a2f38; border-radius: 8px; margin-top: 14px; padding: 8px 8px 6px 8px; font-weight: 600; color: #9aa3b2; }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
-QPushButton { background: #232833; border: 1px solid #333a47; border-radius: 6px; padding: 7px 12px; }
-QPushButton:hover { background: #2c3340; }
-QPushButton:disabled { color: #6b7280; }
-QPushButton#primary { background: #106563; border-color: #1c8d8a; font-weight: 700; }
-QPushButton#primary:hover { background: #1a7f7c; }
-QPushButton#accent { background: #163C71; border-color: #2a5aa8; font-weight: 700; }
-QPushButton#accent:hover { background: #1d4d8f; }
-QPushButton#danger { background: #4a1d20; border-color: #B32328; }
-QComboBox, QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox { background: #0f1115; border: 1px solid #333a47; border-radius: 6px; padding: 5px; }
-QLabel#status_ok { color: #3ddc97; font-weight: 600; }
-QLabel#status_warn { color: #E29119; font-weight: 600; }
-QLabel#status_err { color: #ff6b6b; font-weight: 600; }
-QLabel#title { font-size: 20px; font-weight: 800; color: #ffffff; }
-QLabel#subtitle { color: #9aa3b2; }
-QLabel#mono { font-family: Menlo, Consolas, monospace; color: #c8d0dc; }
-QRadioButton, QCheckBox { padding: 2px; color: #e6e9ef; }
-QRadioButton::indicator { width: 14px; height: 14px; }
-QProgressBar { border: 1px solid #333a47; border-radius: 6px; background: #0f1115; text-align: center; }
-QProgressBar::chunk { background: #106563; border-radius: 5px; }
+# --------------------------------------------------------------------------------------------
+# Clinical theme.
+#
+# BRIDGE's control panel is read at a glance, often from a stride away and under bright
+# theatre lighting, sometimes by someone whose hands are occupied and who cannot linger on a
+# small control. That is a different design brief from a desktop dashboard, so the defaults
+# below follow the conventions used across clinical and OR-adjacent software rather than
+# generic app styling:
+#
+#   - Severity has exactly three colours, applied consistently everywhere in the app, matching
+#     the red/amber/green convention IEC 60601-1-8 (medical electrical equipment alarm systems)
+#     and most clinical monitoring UIs use for critical/caution/normal indication.
+#   - Body text is 15px (~12pt at typical desktop DPI) minimum, per common medical-device UI
+#     guidance that critical information stay legible from about a metre away.
+#   - Interactive controls keep a minimum touch target close to 40px (~10mm) high, the spacing
+#     guidance cited to avoid mis-hits under time pressure or with gloved/imprecise input.
+#   - Every focusable control gets a visible focus ring; colour is never the only signal
+#     (status labels pair colour with a text state, never colour alone).
+# --------------------------------------------------------------------------------------------
+
+BG = "#11141a"
+PANEL_BG = "#181c24"
+FIELD_BG = "#0d0f13"
+BORDER = "#2e3542"
+TEXT = "#eef1f6"
+TEXT_MUTED = "#a7b0bf"
+TEXT_DIM = "#7c8494"
+
+TEAL = "#106563"
+TEAL_LIGHT = "#1c8d8a"
+GOLD = "#E29119"
+NAVY = "#163C71"
+MAROON = "#B32328"
+
+# Severity palette -- IEC 60601-1-8-style red/amber/(green|cyan), applied identically to every
+# status label, alert banner and table cell in the app. Never introduce a fourth colour for
+# severity; add a new SEVERITY_* constant here instead so every surface picks it up at once.
+SEVERITY_OK = "#3ddc97"        # normal / reconciled / connected
+SEVERITY_CAUTION = "#f2a63d"   # needs attention, not yet urgent
+SEVERITY_CRITICAL = "#ff5c5c"  # needs a response now
+SEVERITY_NEUTRAL = "#a7b0bf"   # no status to report yet (pending / idle)
+
+STYLESHEET = f"""
+QMainWindow, QDialog, QWizard {{ background: {BG}; }}
+QWidget {{ color: {TEXT}; font-size: 15px; background: {BG}; }}
+QScrollArea, QScrollArea > QWidget > QWidget {{ background: {BG}; border: none; }}
+QGroupBox {{
+    background: {PANEL_BG}; border: 1px solid {BORDER}; border-radius: 10px;
+    margin-top: 16px; padding: 12px 10px 10px 10px; font-weight: 700; font-size: 13px;
+    color: {TEXT_MUTED}; letter-spacing: 0.5px;
+}}
+QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; }}
+QPushButton {{
+    background: #262c38; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 10px 16px; min-height: 20px; font-size: 14px; font-weight: 600;
+}}
+QPushButton:hover {{ background: #2f3646; border-color: #454e60; }}
+QPushButton:pressed {{ background: #20252f; }}
+QPushButton:disabled {{ color: {TEXT_DIM}; background: #1c2028; border-color: #262b35; }}
+QPushButton:focus {{ border: 2px solid {TEAL_LIGHT}; padding: 9px 15px; }}
+QPushButton:checkable:checked {{ background: {TEAL}; border-color: {TEAL_LIGHT}; }}
+QPushButton#primary {{ background: {TEAL}; border-color: {TEAL_LIGHT}; color: #ffffff; font-weight: 800; }}
+QPushButton#primary:hover {{ background: #147a77; }}
+QPushButton#accent {{ background: {NAVY}; border-color: #2a5aa8; color: #ffffff; font-weight: 800; }}
+QPushButton#accent:hover {{ background: #1d4d8f; }}
+QPushButton#danger {{ background: #3a1517; border-color: {MAROON}; color: #ffd7d7; font-weight: 800; }}
+QPushButton#danger:hover {{ background: #4a1d20; }}
+QComboBox, QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {{
+    background: {FIELD_BG}; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 8px; min-height: 18px; font-size: 14px; selection-background-color: {TEAL};
+}}
+QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{ border: 2px solid {TEAL_LIGHT}; }}
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QLabel#status_ok {{ color: {SEVERITY_OK}; font-weight: 700; }}
+QLabel#status_warn {{ color: {SEVERITY_CAUTION}; font-weight: 700; }}
+QLabel#status_err {{ color: {SEVERITY_CRITICAL}; font-weight: 700; }}
+QLabel#title {{ font-size: 24px; font-weight: 800; color: #ffffff; letter-spacing: 0.5px; }}
+QLabel#subtitle {{ color: {TEXT_MUTED}; font-size: 13px; }}
+QLabel#mono {{ font-family: "Cascadia Code", Consolas, Menlo, monospace; font-size: 14px; color: #cfd7e3; }}
+QLabel#section_head {{ font-size: 15px; font-weight: 700; color: {TEXT}; padding-top: 4px; }}
+QRadioButton, QCheckBox {{ padding: 4px 2px; font-size: 14px; spacing: 8px; }}
+QRadioButton::indicator, QCheckBox::indicator {{ width: 20px; height: 20px; }}
+QTableWidget {{
+    background: {FIELD_BG}; alternate-background-color: #12151b; gridline-color: {BORDER};
+    border: 1px solid {BORDER}; border-radius: 8px; font-size: 14px;
+}}
+QHeaderView::section {{
+    background: #1a1f28; color: {TEXT_MUTED}; padding: 8px; border: none;
+    border-bottom: 1px solid {BORDER}; font-weight: 700; font-size: 12px;
+}}
+QTableWidget::item {{ padding: 6px; }}
+QProgressBar {{ border: 1px solid {BORDER}; border-radius: 8px; background: {FIELD_BG}; text-align: center; min-height: 18px; }}
+QProgressBar::chunk {{ background: {TEAL}; border-radius: 7px; }}
+QScrollBar:vertical {{ background: transparent; width: 12px; }}
+QScrollBar::handle:vertical {{ background: #3a4150; border-radius: 6px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: #4a5364; }}
+QToolTip {{ background: #232935; color: {TEXT}; border: 1px solid {BORDER}; padding: 6px; font-size: 13px; }}
 """
 
 
@@ -60,7 +133,8 @@ class ImageView(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(320, 180)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background: #0b0d10; border: 1px solid #2a2f38; border-radius: 8px; color: #6b7280;")
+        self.setStyleSheet(f"background: {FIELD_BG}; border: 1px solid {BORDER}; border-radius: 10px; "
+                           f"color: {TEXT_DIM}; font-size: 14px;")
         self.setText(placeholder)
         self._pix: Optional[QPixmap] = None
         self._img_size = (0, 0)
@@ -136,7 +210,8 @@ class LogPanel(QPlainTextEdit, logging.Handler):
         logging.Handler.__init__(self)
         self.setReadOnly(True)
         self.setMaximumBlockCount(max_lines)
-        self.setStyleSheet("font-family: Menlo, Consolas, monospace; font-size: 11px;")
+        self.setStyleSheet(f"background: {FIELD_BG}; border: 1px solid {BORDER}; border-radius: 8px; "
+                           f"font-family: Consolas, Menlo, monospace; font-size: 13px; color: #b6bfcc;")
         self._bridge = self._Bridge()
         self._bridge.line.connect(self.appendPlainText)
         self.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(message)s", "%H:%M:%S"))

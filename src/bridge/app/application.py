@@ -31,11 +31,33 @@ from bridge.spatial.homography import CoordinateMapper
 from bridge.spatial.profile import ProfileStore
 from bridge.healthcare.guide import ProcedureGuide
 from bridge.healthcare.procedures import ProcedureLibrary
-from bridge.healthcare.prompts import HEALTHCARE_CONTEXT
+from bridge.healthcare.prompts import HEALTHCARE_CONTEXT, SURGICAL_INSTRUMENT_CONTEXT
 from bridge.healthcare.safety import cautions_for_target, check_request
 from bridge.ai.prompts import PromptBuilder
 
 log = logging.getLogger("bridge.core")
+
+
+def _ai_error_display(message: str) -> str:
+    """Two-line, on-surface version of an AIError: what happened, what to do about it.
+
+    GeminiProvider already classifies the failure (quota / retired model / other) into
+    its message text; this just picks the right suggestion to project rather than the
+    bare exception string, while the full provider message still reaches the logs and
+    the diagnostics panel unabridged.
+    """
+    low = message.lower()
+    if "session ai budget" in low or "budget reached" in low:
+        return "AI session budget reached.\nWorking locally; raise ai.budget_inr or restart to continue."
+    if "daily quota" in low:
+        return "Daily AI quota exhausted.\nWorking locally; will check again hourly."
+    if "quota" in low:
+        return "AI quota exceeded.\nWorking locally; will retry automatically."
+    if "retired" in low or "no longer available" in low or "unavailable (retired" in low:
+        return "AI model unavailable.\nCheck ai.model in settings.yaml."
+    if "overloaded" in low or "high demand" in low:
+        return "AI service is busy right now.\nWorking locally; will retry automatically."
+    return "AI request failed.\nCheck the configured model and API key."
 
 
 class _CameraLink:
@@ -90,7 +112,12 @@ class BridgeCore:
         self._frame_unsub = self.cameras.add_frame_listener(self._on_frame)
         self._frame_count = 0
         self.bus.subscribe(Topic.CAMERA_CONNECTED, self._on_camera_connected)
-        PromptBuilder.extra_context = HEALTHCARE_CONTEXT if self.settings.domain == "healthcare" else ""
+        # Surgical instrument nomenclature is appended, not swapped in, so ward/clinical-supply
+        # identification (syringes, blood tubes, IV lines, ...) stays covered too — a workspace
+        # can show either kind of item, sometimes both in the same frame.
+        PromptBuilder.extra_context = (
+            f"{HEALTHCARE_CONTEXT}\n\n{SURGICAL_INSTRUMENT_CONTEXT}" if self.settings.domain == "healthcare" else ""
+        )
         self.procedures = ProcedureLibrary()
         self.guide = ProcedureGuide(self, self.procedures, speak=self.speak)
         self.guide.on_step = lambda step, i, n: self.bus.publish(Topic.PROCEDURE_STEP, step=step, index=i, total=n)
@@ -179,15 +206,20 @@ class BridgeCore:
         try:
             sim = (self.simulation[0], self.simulation[2]) if (self.simulation and kind == "mock") else None
             self.ai = build_provider(kind, self.config.secrets.gemini_api_key, self.settings.ai.model,
-                                     self.settings.ai.timeout_s, simulation=sim)
+                                     self.settings.ai.timeout_s, simulation=sim,
+                                     budget_inr=self.settings.ai.budget_inr, usd_to_inr=self.settings.ai.usd_to_inr)
         except (AIError, ValueError) as e:
             self.ai = None
             self.state.diagnostics.ai_provider = kind
+            self.state.diagnostics.ai_model = self.settings.ai.model
             self.state.diagnostics.ai_status = f"Unavailable: {e}"
             log.error("AI provider unavailable: %s", e)
             return False, str(e)
         self.state.diagnostics.ai_provider = self.ai.status.provider
+        self.state.diagnostics.ai_model = self.ai.status.model or self.settings.ai.model
         self.state.diagnostics.ai_status = "Ready"
+        self.state.diagnostics.ai_budget_inr = self.settings.ai.budget_inr
+        self.state.diagnostics.ai_usd_to_inr = self.settings.ai.usd_to_inr
         return True, "ok"
 
     def _sync_ai_status(self) -> None:
@@ -197,6 +229,9 @@ class BridgeCore:
         self.state.diagnostics.ai_status = st.text
         self.state.diagnostics.ai_last_request_ts = st.last_request_ts
         self.state.diagnostics.ai_last_latency_s = st.last_latency_s
+        self.state.diagnostics.ai_last_tokens_total = st.last_tokens_total
+        self.state.diagnostics.ai_last_cost_usd = st.last_cost_usd
+        self.state.diagnostics.ai_session_cost_usd = st.session_cost_usd
 
     def ask(self, query: str, label_override: str | None = None) -> ExecutionResult:
         """Natural-language entry point. Blocking (call from a worker thread in the UI)."""
@@ -227,7 +262,8 @@ class BridgeCore:
             except AIError as e:
                 self._sync_ai_status()
                 self.bus.publish(Topic.AI_ERROR, error=str(e))
-                self.executor.execute(self.planner.plan(TargetIdentification(intent="show_message", message="AI request failed."), 1, 1), frame)
+                display = _ai_error_display(str(e))
+                self.executor.execute(self.planner.plan(TargetIdentification(intent="show_message", message=display), 1, 1), frame)
                 return ExecutionResult(False, f"AI error: {e}")
             self._sync_ai_status()
         self.last_identification = ident
@@ -258,6 +294,9 @@ class BridgeCore:
         try:
             plan: ActionPlan = self.ai.plan_action(frame, task_context)
         except AIError as e:
+            self.bus.publish(Topic.AI_ERROR, error=str(e))
+            self.executor.execute(self.planner.plan(
+                TargetIdentification(intent="show_message", message=_ai_error_display(str(e))), 1, 1), frame)
             return ExecutionResult(False, f"AI error: {e}")
         finally:
             self._sync_ai_status()
@@ -272,14 +311,24 @@ class BridgeCore:
     def start_assistant(self) -> "JarvisAssistant":  # type: ignore[name-defined] # noqa: F821
         """Create the always-on assistant layer (scene memory, counts, case, monitor)."""
         from bridge.assistant.jarvis import JarvisAssistant
+        from bridge.vision.surgical_recognizer import build_recognizer
 
         if self.assistant is not None:
             return self.assistant
         a = self.settings.assistant
         s = self.settings.surgical
+        r = self.settings.recognizer
+        recognizer = None
+        if r.enabled:
+            recognizer = build_recognizer(r.weights_path, r.labels_path, r.conf_threshold,
+                                          r.iou_threshold, r.input_size)
+            if recognizer is not None and not recognizer.available:
+                log.warning("Local instrument recognizer configured but not usable: %s",
+                           recognizer.status.last_error)
         self.assistant = JarvisAssistant(self, scan_hz=a.scan_hz, ai_label_interval_s=a.ai_label_interval_s,
+                                         ai_relabel_interval_s=a.ai_relabel_interval_s,
                                          monitor_interval_s=a.monitor_interval_s, proactive=a.proactive,
-                                         records_dir=a.records_dir)
+                                         records_dir=a.records_dir, recognizer=recognizer)
         self.assistant.show_board = a.show_count_board
         m = self.assistant.monitor
         m.sharp_grace_s, m.field_item_grace_s = s.sharp_grace_s, s.field_item_grace_s
@@ -308,6 +357,16 @@ class BridgeCore:
                 return "Spatial calibration is required first."
             if "not found" in result.message.lower():
                 return f"I could not find {target} on the surface. Please clarify."
+            if "session ai budget" in result.message.lower() or "budget reached" in result.message.lower():
+                return "The AI session budget has been reached for this run. I will keep working locally."
+            if "daily quota" in result.message.lower():
+                return "The AI service has used up its daily allowance and likely will not come back until it resets. I will keep working locally."
+            if "quota" in result.message.lower():
+                return "The AI service is temporarily over its usage limit. I will keep working locally and try it again shortly."
+            if "retired" in result.message.lower() or "no longer available" in result.message.lower():
+                return "The configured AI model is unavailable. An administrator needs to update the settings."
+            if "overloaded" in result.message.lower() or "high demand" in result.message.lower():
+                return "The AI service is busy right now. I will keep working locally and try it again shortly."
             if "AI" in result.message:
                 return "The AI service did not respond. Please try again."
             return result.message.replace("\n", " ")

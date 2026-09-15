@@ -17,6 +17,7 @@ Desktop (PySide6) app: commodity camera + commodity projector + Gemini → spati
 - The safety gate runs **twice**, on purpose: in `JarvisAssistant.handle` before the intent grammar, and again in `BridgeCore.ask` before the AI. Never remove either.
 - Surgical counts are arithmetic the team owns. `CountLine.counted_*` is what a person counted; `observed` is what the camera sees. Never let vision write a count, and never phrase a reconciled count as permission to close.
 - The scene graph (`perception/`) is the only place object identity persists. AI supplies labels, local CV supplies positions — never the reverse.
+- Scene labelling has two possible label sources now, not one: an optional local specialist recognizer (`vision/surgical_recognizer.py`, ONNX, no network) tried first, then Gemini for anything left unlabelled. Both go through `SceneGraph.apply_ai(..., source=...)` — same merge rules, same invariants, only the `source` tag differs. Never bundle model weights with the repo; `recognizer.weights_path`/`labels_path` are always deployer-supplied. See `docs/recognition.md` for the licensing reason why.
 - Proactive alerts need a key and a cooldown, state an observation rather than a conclusion, and use "I can/cannot see" wording.
 
 ## Layout
@@ -38,6 +39,7 @@ bridge --headless-selftest      # CI smoke: calibrate + query in simulation
 - New spoken command: add a pattern + `Kind` in `assistant/intents.py`, handle it in `JarvisAssistant._dispatch`. Keep patterns conservative — `unknown` means "ask the model", never "guess".
 - New proactive rule: add a `_rule_*` method to `SafetyMonitor` and call it from `evaluate`. Use `_held_for` for a grace period and give it a stable key.
 - New instrument set / checklist: JSON in `sets/` matching `InstrumentSet`, or `case.load_checklist(path)`.
+- Local recognition model: point `recognizer.weights_path`/`labels_path` at a YOLO-family ONNX export (v5 or v8+ output shape) and a matching labels file; `vision.surgical_recognizer.decode_yolo_onnx_output` is the pure decode function if a different export shape needs support.
 
 ## Testing philosophy
 The simulator (`simulation/world.py`) knows the ground-truth camera→projector homography, so calibration accuracy, target localisation and tracking are asserted numerically (`tests/test_pipeline_and_devices.py::test_full_demo_calibrate_ask_follow`). Anything that cannot be tested physically gets a deterministic software test here.

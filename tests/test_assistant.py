@@ -389,3 +389,128 @@ def test_snapshot_gives_the_ui_everything_in_one_read(core):
     assert snap["counted"] == snap["expected"] > 0
     assert snap["verdict"] == "reconciled"
     assert isinstance(snap["board"], list) and snap["board"]
+
+
+# --- minimum-use background labelling gate ---------------------------------------------------
+def test_needs_ai_label_true_only_for_present_unlabelled_or_unconfident_entities():
+    from bridge.perception.scene_graph import SceneEntity, SceneGraph
+    from bridge.spatial.geometry import BoundingBox
+
+    box = BoundingBox.from_xyxy(0, 0, 10, 10)
+    scene = SceneGraph()
+    assert not scene.needs_ai_label(), "an empty scene has nothing to label"
+
+    unlabelled = SceneEntity(id="e1", bbox=box, label="", label_confidence=0.0, present=True)
+    scene._entities[unlabelled.id] = unlabelled
+    assert scene.needs_ai_label(), "a present, unlabelled entity needs a vision pass"
+
+    unlabelled.label, unlabelled.label_confidence = "mayo scissors", 0.35
+    assert scene.needs_ai_label(), "a low-confidence label still needs re-checking"
+
+    unlabelled.label_confidence = 0.9
+    assert not scene.needs_ai_label(), "a confidently labelled, present entity needs nothing further"
+
+    unlabelled.present = False
+    unlabelled.label, unlabelled.label_confidence = "", 0.0
+    assert not scene.needs_ai_label(), "an absent entity is not worth a call just to name it"
+
+
+def test_background_labelling_skips_once_the_tray_is_confidently_labelled(core):
+    """The minimum-use gate: on_frame must not spend a Gemini call on a tick where
+    nothing on the tray actually needs naming, and must resume once something does."""
+    a = core.assistant
+    assert core.calibrate().success
+    frame = core.cameras.wait_for_frame(2.0)
+
+    a.case.start("minor case")
+    assert a.case.active
+    a.ai_label_interval_s = 0.0        # check every tick
+    a.ai_relabel_interval_s = 1000.0   # keep the staleness safety net out of the way for this test
+    a._last_ai_label = a._last_ai_call = 0.0
+
+    calls = {"n": 0}
+    original = core.ai.understand_scene
+
+    def counting_understand(f):
+        calls["n"] += 1
+        return original(f)
+
+    core.ai.understand_scene = counting_understand
+
+    # First tick: local detection has populated unlabelled entities -> a label pass is due.
+    a._last_scan = 0.0  # bypass the unrelated scan-rate throttle so back-to-back calls in this test all land
+    a.on_frame(frame)
+    for _ in range(50):
+        if not a._ai_labelling.is_set():
+            break
+        time.sleep(0.02)
+    assert calls["n"] == 1, "an unlabelled tray must still trigger exactly one background pass"
+
+    # Real world objects are now confidently labelled (the simulation oracle answers at 0.95).
+    # Some local contour detections are noise (shadows, tray edges) that the oracle never
+    # names — those stay unresolved forever, which is expected and exactly why the gate
+    # tracks *newly* unresolved ids rather than "any unresolved id at all".
+    assert a.scene.unresolved_label_ids() == a._last_unresolved
+
+    # Second tick, nothing changed: must NOT spend another call, even though some noisy
+    # entities are still technically unresolved.
+    a._last_scan = 0.0
+    a.on_frame(frame)
+    for _ in range(50):
+        if not a._ai_labelling.is_set():
+            break
+        time.sleep(0.02)
+    assert calls["n"] == 1, "unchanged (still-)unresolved entities must not cost a second call"
+
+    # A genuinely new, unlabelled entity appears -> must resume calling.
+    from bridge.perception.scene_graph import SceneEntity
+    from bridge.spatial.geometry import BoundingBox
+
+    new_ent = SceneEntity(id="e-new", bbox=BoundingBox.from_xyxy(5, 5, 15, 15), label="", present=True)
+    a.scene._entities[new_ent.id] = new_ent
+    a._last_scan = 0.0
+    a.on_frame(frame)
+    for _ in range(50):
+        if not a._ai_labelling.is_set():
+            break
+        time.sleep(0.02)
+    assert calls["n"] == 2, "a new unlabelled entity must trigger another background pass"
+
+
+def test_background_labelling_staleness_net_still_fires_when_tray_looks_settled(core):
+    """Even when nothing looks new, BRIDGE re-checks every ai_relabel_interval_s so a
+    swapped-in instrument or a stale bad label doesn't sit unverified indefinitely."""
+    a = core.assistant
+    assert core.calibrate().success
+    frame = core.cameras.wait_for_frame(2.0)
+
+    a.case.start("minor case")
+    a.ai_label_interval_s = 0.0
+    a.ai_relabel_interval_s = 0.05     # force the staleness net to be due almost immediately
+    a._last_ai_label = a._last_ai_call = 0.0
+
+    calls = {"n": 0}
+    original = core.ai.understand_scene
+
+    def counting_understand(f):
+        calls["n"] += 1
+        return original(f)
+
+    core.ai.understand_scene = counting_understand
+
+    a._last_scan = 0.0  # bypass the unrelated scan-rate throttle
+    a.on_frame(frame)
+    for _ in range(50):
+        if not a._ai_labelling.is_set():
+            break
+        time.sleep(0.02)
+    assert calls["n"] == 1
+
+    time.sleep(0.06)  # let the staleness interval elapse
+    a._last_scan = 0.0
+    a.on_frame(frame)
+    for _ in range(50):
+        if not a._ai_labelling.is_set():
+            break
+        time.sleep(0.02)
+    assert calls["n"] == 2, "the staleness safety net must still force a re-check even though nothing looked new"

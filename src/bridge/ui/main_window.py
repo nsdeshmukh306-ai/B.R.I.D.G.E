@@ -5,10 +5,10 @@ import logging
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
-    QRadioButton, QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
 from bridge.app.application import BridgeCore
@@ -22,7 +22,7 @@ from bridge.spatial.geometry import Point
 from bridge.ui.calibration_wizard import CalibrationWizard
 from bridge.ui.settings import SettingsDialog
 from bridge.ui.surgical_panel import SurgicalPanel
-from bridge.ui.widgets import ImageView, LogPanel, run_in_background
+from bridge.ui.widgets import BORDER, PANEL_BG, TEAL_LIGHT, TEXT, ImageView, LogPanel, run_in_background
 
 log = logging.getLogger("bridge.ui")
 
@@ -31,6 +31,7 @@ WELCOME = ("WELCOME TO BRIDGE\n\nConnect:\n  1. Camera\n  2. Projector\n\nThen O
 READY = ('BRIDGE READY — say it, or type it\n\nTry:\n  "Where is the syringe?"       "Point to the sharps container."\n'
          '  "Highlight the lavender tube."   "Where should I put the needle?"\n'
          '  "Start the order of draw."      then "next", "repeat", "back", "stop".\n\n'
+         'Hold the "P" key (anywhere in this window) to push-to-talk one command.\n\n'
          'BRIDGE locates items and guides protocol steps. It does not diagnose, prescribe or decide doses.')
 
 
@@ -58,11 +59,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.core = core
         self.setWindowTitle("BRIDGE — Spatial AI for Healthcare")
-        self.resize(1320, 820)
+        self.resize(1540, 880)
+        self.setMinimumSize(1260, 740)
         self.projection: Optional[ProjectionWindow] = None
         self._drag_obj: Optional[str] = None
         self._build()
         self._wire_events()
+        QApplication.instance().installEventFilter(self)  # global "P" push-to-talk hotkey, see eventFilter()
         self.status_signal.connect(self._on_status)
         self.voice_signal.connect(self._on_voice_event)
         self.step_signal.connect(self._on_step)
@@ -216,7 +219,7 @@ class MainWindow(QMainWindow):
         self.btn_listen.setCheckable(True)
         self.btn_listen.toggled.connect(self._toggle_listen)
         self.btn_ptt = QPushButton("Push to talk")
-        self.btn_ptt.setToolTip("Hold to capture one command (or use the Space bar while the window has focus)")
+        self.btn_ptt.setToolTip('Hold to capture one command — or hold the "P" key anywhere in this window')
         self.btn_ptt.pressed.connect(self._ptt_pressed)
         self.btn_ptt.released.connect(self._ptt_released)
         row.addWidget(self.btn_listen, 2)
@@ -281,8 +284,11 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(panel)
-        scroll.setMinimumWidth(360)
-        scroll.setMaximumWidth(420)
+        # Wide enough that a two/three-button row (e.g. "Load profile" + "Click-to-project
+        # test", or "OPEN PROJECTION" + "CLOSE") never clips its label at the 15px base font
+        # size and ~40px touch targets used throughout this panel.
+        scroll.setMinimumWidth(500)
+        scroll.setMaximumWidth(560)
         splitter.addWidget(scroll)
 
         # centre: views
@@ -290,7 +296,10 @@ class MainWindow(QMainWindow):
         cl = QVBoxLayout(centre)
         self.lbl_banner = QLabel(WELCOME)
         self.lbl_banner.setObjectName("mono")
-        self.lbl_banner.setStyleSheet("background:#1b2028; border-radius:8px; padding:12px; font-family: Menlo, Consolas, monospace;")
+        self.lbl_banner.setStyleSheet(
+            f"background: {PANEL_BG}; color: {TEXT}; border: 1px solid {BORDER}; border-left: 4px solid {TEAL_LIGHT}; "
+            f"border-radius: 8px; padding: 14px; font-family: 'Cascadia Code', Consolas, Menlo, monospace; font-size: 14px;"
+        )
         cl.addWidget(self.lbl_banner)
         views = QHBoxLayout()
         vb = QVBoxLayout()
@@ -332,7 +341,7 @@ class MainWindow(QMainWindow):
         right.setMinimumWidth(280)
         right.setMaximumWidth(360)
         splitter.addWidget(right)
-        splitter.setSizes([380, 700, 300])
+        splitter.setSizes([520, 700, 320])
         self.statusBar().showMessage("Ready")
 
     # ---- events from core --------------------------------------------------------------------------
@@ -651,6 +660,25 @@ class MainWindow(QMainWindow):
             self.lbl_step.setText("Procedure complete." if total and index >= total else "No procedure running.")
         else:
             self.lbl_step.setText(f"Step {index + 1}/{total}: {step.instruction}" + (f"\n⚠ {step.caution}" if step.caution else ""))
+
+    # ---- push-to-talk hotkey --------------------------------------------------------------------------
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        """Global "P" push-to-talk: works no matter which widget in this window has focus (installed on
+        the whole application in __init__, not just this window, so it must actively opt out of
+        anywhere text is being typed rather than relying on normal focus-based key delivery)."""
+        etype = event.type()
+        if (etype in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and event.key() == Qt.Key.Key_P
+                and not event.isAutoRepeat() and QApplication.activeWindow() is self
+                and not isinstance(QApplication.focusWidget(), QLineEdit)):
+            if etype == QEvent.Type.KeyPress:
+                if not self.btn_ptt.isDown():
+                    self.btn_ptt.setDown(True)  # visual feedback only; does not re-trigger pressed/released signals
+                    self._ptt_pressed()
+            elif self.btn_ptt.isDown():
+                self.btn_ptt.setDown(False)
+                self._ptt_released()
+            return True  # consume: don't also let "p" reach a focused widget as a mnemonic/text char
+        return super().eventFilter(obj, event)
 
     # ---- registration trim ---------------------------------------------------------------------------
     def keyPressEvent(self, event) -> None:  # noqa: N802

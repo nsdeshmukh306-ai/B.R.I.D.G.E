@@ -10,3 +10,4 @@ profiles/*.json
 !profiles/.gitkeep
 .venv/
 case_records/
+.hf_cache/

@@ -28,9 +28,23 @@ tracking:
   min_confidence: 0.3
 ai:
   provider: gemini
-  model: gemini-2.5-flash
+  model: gemini-3.6-flash
   min_confidence: 0.5
   timeout_s: 30.0
+  budget_inr: 500.0          # soft spend cap for this run; match your loaded API credit. null/0 disables it
+  usd_to_inr: 88.0           # approximate manual FX rate used only for the cap above — not live-fetched
+recognizer:
+  # A specialist, local, offline instrument-recognition model. Off by default —
+  # nothing is bundled. See docs/recognition.md before pointing this at a
+  # downloaded model: pretrained surgical-instrument weights evaluated during
+  # development are non-commercially licensed and are not a fit for a paid
+  # deployment without either a separate licence or your own trained weights.
+  enabled: false
+  weights_path: null         # path to a YOLO-family .onnx export
+  labels_path: null          # one class name per line, in the model's training order
+  conf_threshold: 0.45
+  iou_threshold: 0.45
+  input_size: 640
 render:
   background: black          # projector emits only the graphics
   target_style: pulse
@@ -39,7 +53,7 @@ render:
   fps: 60
 voice:
   enabled: true              # start listening when calibration is valid (physical mode)
-  stt_provider: gemini       # gemini | whisper (offline, pip install faster-whisper) | mock
+  stt_provider: whisper      # whisper (offline, pip install faster-whisper, default) | gemini | mock
   tts_enabled: true
   tts_rate: 175
   tts_voice: null            # substring of an installed voice name
@@ -54,7 +68,9 @@ assistant:
   enabled: true              # the always-on surgical assistant (scene memory, counts, case, alerts)
   proactive: true            # BRIDGE may speak first when something is wrong
   scan_hz: 5.0               # scene-graph updates per second (local CV, no AI)
-  ai_label_interval_s: 12.0  # how often the model is asked to name what it sees
+  ai_label_interval_s: 12.0  # how often BRIDGE checks for anything unlabelled/uncertain to name (not
+                              # a blind timer: skipped entirely once the tray is fully labelled and stable)
+  ai_relabel_interval_s: 90.0  # staleness safety net: force a re-check this often regardless
   monitor_interval_s: 1.0
   show_count_board: true     # project the live count board onto the surface
   records_dir: case_records

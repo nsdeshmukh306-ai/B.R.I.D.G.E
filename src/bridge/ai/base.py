@@ -25,21 +25,40 @@ class AIError(RuntimeError):
 @dataclass
 class AIStatus:
     provider: str
+    model: str = ""
     connected: bool = False
     last_request_ts: Optional[float] = None
     last_latency_s: Optional[float] = None
     last_error: str = ""
     requests: int = 0
     history: list[dict] = field(default_factory=list)
+    # Usage of the most recent successful call — tokens are None when a provider doesn't
+    # report usage metadata (e.g. the mock/simulation providers).
+    last_tokens_in: Optional[int] = None
+    last_tokens_out: Optional[int] = None
+    last_tokens_total: Optional[int] = None
+    last_cost_usd: Optional[float] = None
+    # Running total of estimated cost for this process's lifetime, used to enforce an
+    # optional soft session budget (see GeminiProvider's budget_inr) and shown in
+    # diagnostics so a paid API key's spend is visible without leaving the app.
+    session_cost_usd: float = 0.0
 
-    def record(self, kind: str, latency: float, ok: bool, detail: str = "") -> None:
+    def record(self, kind: str, latency: float, ok: bool, detail: str = "",
+               tokens_in: Optional[int] = None, tokens_out: Optional[int] = None,
+               tokens_total: Optional[int] = None, cost_usd: Optional[float] = None) -> None:
         self.last_request_ts = time.time()
         self.last_latency_s = latency
         self.requests += 1
         self.connected = ok or self.connected
         if not ok:
             self.last_error = detail
-        self.history.append({"kind": kind, "latency_s": latency, "ok": ok, "detail": detail[:200]})
+        if ok:
+            self.last_tokens_in, self.last_tokens_out = tokens_in, tokens_out
+            self.last_tokens_total, self.last_cost_usd = tokens_total, cost_usd
+            if cost_usd is not None:
+                self.session_cost_usd += cost_usd
+        self.history.append({"kind": kind, "latency_s": latency, "ok": ok, "detail": detail[:200],
+                             "tokens_total": tokens_total, "cost_usd": cost_usd})
         self.history = self.history[-50:]
 
     @property

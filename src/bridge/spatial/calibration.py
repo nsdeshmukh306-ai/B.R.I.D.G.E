@@ -201,11 +201,24 @@ class PlanarMarkerCalibration(CalibrationMethod):
         if expected is not None:
             r = self._search_radius(camera.size())
             near = [d for d in dets if d.center.distance_to(expected) <= r]
-            if not near:
-                log.debug("marker at %s: %d blobs but none within %.0fpx of expected %s", p.as_int(), len(dets), r, expected.as_int())
-                return None
-            near.sort(key=lambda d: (d.center.distance_to(expected) / r) - d.confidence)
-            return near[0]
+            if near:
+                near.sort(key=lambda d: (d.center.distance_to(expected) / r) - d.confidence)
+                return near[0]
+            # The coarse (footprint-corner) homography that produced `expected` is a 4-point
+            # fit and can be locally inaccurate, especially when the footprint quad is small
+            # or heavily skewed in the camera view — the real marker then lands outside the
+            # predicted radius even though it was detected. Returning None here (as before)
+            # silently drops a real detection and was the main source of "0 markers found"
+            # despite a clean footprint. `dets` is still constrained to the footprint ROI, and
+            # exactly one disc is lit at a time, so falling back to the single brightest blob
+            # in that ROI is a much smaller risk than the false positives the expected-position
+            # filter exists to reject (which come from reflections *outside* the footprint).
+            best = dets[0]
+            if best.confidence >= self.min_confidence:
+                log.debug("marker at %s: %d blobs but none within %.0fpx of expected %s; using largest in-ROI blob instead",
+                          p.as_int(), len(dets), r, expected.as_int())
+                return best
+            return None
         best = dets[0]
         return best if best.confidence >= self.min_confidence * 0.3 else None
 

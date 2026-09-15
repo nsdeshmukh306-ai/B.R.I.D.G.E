@@ -59,6 +59,7 @@ from bridge.surgical.monitor import Alert, SafetyMonitor
 from bridge.surgical.sets import SetLibrary
 from bridge.surgical.trays import TrayLayout, Zone, infer_tray_zone
 from bridge.vision.detection import ContourDetector, Detection
+from bridge.vision.surgical_recognizer import LocalInstrumentRecognizer
 
 log = logging.getLogger("bridge.jarvis")
 
@@ -69,8 +70,10 @@ class JarvisAssistant:
     """Owns scene memory, the case, the counts and the proactive monitor."""
 
     def __init__(self, core, *, scan_hz: float = 5.0, ai_label_interval_s: float = 12.0,
+                 ai_relabel_interval_s: float = 90.0,
                  monitor_interval_s: float = 1.0, proactive: bool = True,
-                 records_dir: Path | str = Path("case_records")):
+                 records_dir: Path | str = Path("case_records"),
+                 recognizer: Optional[LocalInstrumentRecognizer] = None):
         self.core = core
         self.scene = SceneGraph()
         self.conversation = Conversation()
@@ -79,17 +82,25 @@ class JarvisAssistant:
         self.layout = TrayLayout()
         self.monitor = SafetyMonitor(enabled=proactive)
         self.detector = ContourDetector()
+        self.recognizer = recognizer
         self.overlay = OverlayLayer(core.renderer)
         self.announcer = Announcer(core.speak, stop_speaking=getattr(core, "stop_speaking", None))
         self.records_dir = Path(records_dir)
         self.scan_interval_s = 1.0 / max(scan_hz, 0.5)
         self.ai_label_interval_s = ai_label_interval_s
+        # Staleness safety net: even when nothing *looks* new (see SceneGraph.needs_ai_label),
+        # force a re-check this often, so a swapped-in instrument or a bad earlier label
+        # doesn't silently sit there unverified for the rest of the case. Always >= the
+        # normal interval, so it can only make calls rarer, never more frequent.
+        self.ai_relabel_interval_s = max(ai_relabel_interval_s, ai_label_interval_s)
         self.monitor_interval_s = monitor_interval_s
         self.proactive = proactive
         self.show_board = True
         self._last_scan = 0.0
         self._last_monitor = 0.0
-        self._last_ai_label = 0.0
+        self._last_ai_label = 0.0     # last time we *checked* whether a label pass is due
+        self._last_ai_call = 0.0      # last time a labeller actually ran (drives the staleness net)
+        self._last_unresolved: set[str] = set()  # entity ids still unnamed after the last label pass
         self._ai_labelling = threading.Event()
         self._lock = threading.RLock()
         self.on_alert: Callable[[Alert], None] = lambda a: None
@@ -132,10 +143,25 @@ class JarvisAssistant:
                 self._run_monitor(delta, now)
             except Exception:  # noqa: BLE001
                 log.exception("monitor failed")
-        if (self.core.ai is not None and self.case.active
+        have_labeller = self.core.ai is not None or (self.recognizer is not None and self.recognizer.available)
+        if (have_labeller and self.case.active
                 and now - self._last_ai_label >= self.ai_label_interval_s):
             self._last_ai_label = now
-            self._label_scene_async(frame)
+            # Minimum-use gate: a label pass is only worth its call when there is a
+            # *newly* unresolved entity — one the previous pass never got a chance to
+            # judge — rather than any unresolved entity at all. Local contour detection
+            # is noisy (a shadow, a tray edge, a wrinkle can look like a stable object),
+            # so "still nothing confidently named" often means "already asked, still not
+            # a real object" rather than "something changed". Re-asking about the same
+            # handful of non-objects every tick would defeat the whole point. The
+            # staleness net (ai_relabel_interval_s) still forces a full re-check
+            # periodically regardless, so a genuine mislabel or a swapped instrument
+            # doesn't go unverified forever.
+            newly_unresolved = self.scene.unresolved_label_ids() - self._last_unresolved
+            stale_due = now - self._last_ai_call >= self.ai_relabel_interval_s
+            if newly_unresolved or stale_due:
+                self._last_ai_call = now
+                self._label_scene_async(frame)
 
     def _scan(self, frame: np.ndarray, now: float) -> SceneDelta:
         clean = self.core.executor.clean_frame(frame)   # remove BRIDGE's own projection
@@ -166,25 +192,61 @@ class JarvisAssistant:
             log.exception("alert handler failed")
 
     def _label_scene_async(self, frame: np.ndarray) -> None:
-        """Ask the model what things are, in the background. Positions stay local."""
-        if self._ai_labelling.is_set() or self.core.ai is None:
+        """Name what's on the tray, in the background. Positions stay local.
+
+        The local specialist recognizer is tried first when one is configured:
+        it is trained specifically on surgical instruments, so it is a better
+        source of truth than a general vision-language model for exactly this
+        job, and it costs no network round-trip at all. Gemini is asked only
+        for objects the specialist model didn't confidently label — or for
+        everything, if no specialist model is configured. Either way, the
+        result reaches the scene graph through the same apply_ai() path with
+        a `source` tag recording which one supplied it.
+        """
+        if self._ai_labelling.is_set():
+            return
+        if self.core.ai is None and not (self.recognizer is not None and self.recognizer.available):
             return
         self._ai_labelling.set()
         snapshot = frame.copy()
 
         def work() -> None:
+            total = 0
             try:
-                scene = self.core.ai.understand_scene(snapshot)
-                h, w = snapshot.shape[:2]
-                boxes = [(o.label, o.box.to_pixels(w, h), o.confidence, o.visual_description)
-                         for o in scene.objects if o.box is not None and o.label]
-                if boxes:
-                    n = self.scene.apply_ai(boxes)
-                    log.info("Scene labelled by AI: %d objects", n)
+                if self.recognizer is not None and self.recognizer.available:
+                    found = self.recognizer.recognize(snapshot)
+                    boxes = [
+                        (r.label, BoundingBox.from_xyxy(*r.box_xyxy), r.confidence, "")
+                        for r in found if r.confidence >= self.recognizer.conf_threshold
+                    ]
+                    if boxes:
+                        n = self.scene.apply_ai(boxes, source="specialist-local")
+                        total += n
+                        log.info("Scene labelled by local instrument recognizer: %d objects", n)
+
+                # Gemini fills in only what the specialist model didn't confidently name,
+                # and is the only source at all when no specialist model is configured.
+                if self.core.ai is not None:
+                    scene = self.core.ai.understand_scene(snapshot)
+                    h, w = snapshot.shape[:2]
+                    boxes = [(o.label, o.box.to_pixels(w, h), o.confidence, o.visual_description)
+                             for o in scene.objects if o.box is not None and o.label]
+                    if boxes:
+                        n = self.scene.apply_ai(boxes, source="gemini")
+                        total += n
+                        log.info("Scene labelled by Gemini: %d objects", n)
+
+                if total:
                     self.on_state()
-            except Exception as e:  # noqa: BLE001 - AI is optional for perception
+            except Exception as e:  # noqa: BLE001 - AI/recognition is optional for perception
                 log.info("Background scene labelling skipped: %s", e)
             finally:
+                # Remember what's still unresolved *after* a real look, so the next on_frame
+                # tick can tell a genuinely new unlabelled entity apart from the same
+                # not-a-real-object blob that was already asked about and stayed unresolved
+                # (see SceneGraph.unresolved_label_ids) — otherwise persistent local-CV
+                # noise (a shadow, a tray edge) would defeat the minimum-use gate entirely.
+                self._last_unresolved = self.scene.unresolved_label_ids()
                 self._ai_labelling.clear()
 
         threading.Thread(target=work, name="jarvis-scene-label", daemon=True).start()

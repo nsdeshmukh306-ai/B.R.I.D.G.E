@@ -55,7 +55,7 @@ STT_PROMPT = (
 class GeminiSTT(SpeechToText):
     name = "gemini"
 
-    def __init__(self, api_key: Optional[str], model: str = "gemini-2.5-flash", timeout_s: float = 20.0):
+    def __init__(self, api_key: Optional[str], model: str = "gemini-3.6-flash", timeout_s: float = 20.0):
         super().__init__()
         if not api_key:
             raise AIError("GEMINI_API_KEY is not set (needed for Gemini speech recognition).")

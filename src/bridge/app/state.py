@@ -35,9 +35,15 @@ class DiagnosticsSnapshot:
     tracking_target: str = "--"
     tracking_confidence: Optional[float] = None
     ai_provider: str = "--"
+    ai_model: str = "--"
     ai_status: str = "--"
     ai_last_request_ts: Optional[float] = None
     ai_last_latency_s: Optional[float] = None
+    ai_last_tokens_total: Optional[int] = None
+    ai_last_cost_usd: Optional[float] = None
+    ai_session_cost_usd: float = 0.0
+    ai_budget_inr: Optional[float] = None
+    ai_usd_to_inr: float = 88.0
 
     def ai_seconds_since(self) -> Optional[float]:
         if self.ai_last_request_ts is None:

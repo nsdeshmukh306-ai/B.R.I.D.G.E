@@ -27,6 +27,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-timeout>=2.3"]
 hands = ["mediapipe>=0.10"]
 offline-stt = ["faster-whisper>=1.0"]
+recognizer = ["onnxruntime>=1.17"]
 
 [project.scripts]
 bridge = "bridge.main:main"
